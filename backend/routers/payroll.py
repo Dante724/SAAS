@@ -850,7 +850,7 @@ async def remove_adjustment(
     # (one per original) makes a second removal, or two at once, a 409 instead of a double reversal.
     key = reversal_key(e.id)
     if (await db.execute(select(EmployeeBalanceLedger.id).where(
-            EmployeeBalanceLedger.idempotency_key == key))).first():
+            EmployeeBalanceLedger.org_id == e.org_id, EmployeeBalanceLedger.idempotency_key == key))).first():
         raise HTTPException(409, "This adjustment was already removed")
     db.add(EmployeeBalanceLedger(
         org_id=e.org_id, employee_id=e.employee_id, entry_type=e.entry_type,

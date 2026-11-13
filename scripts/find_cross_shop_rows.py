@@ -11,6 +11,9 @@ Checks:
 - PO / transfer / return / write-off / supplier-return lines whose product's shop differs from
   the document's shop
 - job and sale lines whose catalog reference (ref_id) points at another shop's product, service or kit
+- every (org_id, x_id) key migration dbi01 adds (audit DB-03: payments, transactions, job/invoice/
+  sale lines, stock movements/levels, orders, invoices, reservations): a row whose shop differs
+  from its parent's. dbi01 stops on these with a count per key; this lists the row ids.
 
 SAFE ON PRODUCTION: SELECTs only; on Postgres the transaction is READ ONLY; always rolled back.
 
@@ -58,6 +61,15 @@ CHECKS = [
 ]
 
 
+
+def _tenant_key_checks() -> list:
+    """One check per DB-03 key (backend/models.TENANT_FKS, the list dbi01 builds)."""
+    from backend.models import TENANT_FKS
+    return [(f"{child}.{col}: its {parent} row is another shop's",
+             f"SELECT c.id FROM {child} c JOIN {parent} p ON p.id = c.{col} WHERE c.org_id <> p.org_id")
+            for child, col, parent in TENANT_FKS]
+
+
 async def main() -> int:
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -69,7 +81,7 @@ async def main() -> int:
         async with engine.connect() as conn:
             if conn.dialect.name == "postgresql":
                 await conn.execute(text("SET TRANSACTION READ ONLY"))
-            for label, sql in CHECKS:
+            for label, sql in CHECKS + _tenant_key_checks():
                 try:
                     ids = [r[0] for r in (await conn.execute(text(sql))).all()]
                 except Exception as e:   # a table this schema doesn't have yet

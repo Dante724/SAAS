@@ -299,6 +299,7 @@ class CommissionEngine:
         if amount == 0:
             return False
         existing = (await self.db.execute(select(EmployeeBalanceLedger.id).where(
+            EmployeeBalanceLedger.org_id == self.org_id,   # DB-15: keys are unique per shop
             EmployeeBalanceLedger.idempotency_key == EmployeeBalanceLedger.normalize_key(idempotency_key)))).scalar_one_or_none()
         if existing:
             return False

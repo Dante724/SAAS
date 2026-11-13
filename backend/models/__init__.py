@@ -17,6 +17,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -26,6 +27,7 @@ from sqlalchemy import (
     event,
     text,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 
 from backend.core.client_source import current_client
@@ -228,7 +230,7 @@ class Organisation(Base):
     discount_until: Mapped[Optional[date]] = mapped_column(Date)       # discount ends after this day
     discount_reason: Mapped[Optional[str]] = mapped_column(String(300))
     suspend_message: Mapped[Optional[str]] = mapped_column(String(500))  # shown to the shop while suspended
-    assigned_admin_id: Mapped[Optional[str]] = mapped_column(String, index=True)  # whose book this shop is in
+    assigned_admin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("platform_admins.id", ondelete="SET NULL"), index=True)  # whose book this shop is in
     last_contacted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # ── Time clocks (build 144x): org master switches. Effective clock for an
     # employee = org switch ON *and* their per-employee track_* flag ON. ──
@@ -305,20 +307,23 @@ class Organisation(Base):
     membership_prompt_snooze_days: Mapped[int] = mapped_column(Integer, default=90)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Audit DB-12: when the shop left Tekly (services/offboarding: exported, then switched off).
+    # Its rows stay: money records are never deleted (no hard purge exists).
+    offboarded_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     locations: Mapped[list["Location"]] = relationship(back_populates="org")
     employees: Mapped[list["Employee"]] = relationship(back_populates="org")
 
 class Location(OrgScoped, Base):
     __tablename__ = "locations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     name: Mapped[str] = mapped_column(String(200))
     address: Mapped[Optional[str]] = mapped_column(Text)
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     timezone: Mapped[str] = mapped_column(String(100), default="UTC")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     receipt_header: Mapped[Optional[str]] = mapped_column(Text)
-    price_type_id: Mapped[Optional[str]] = mapped_column(String)
+    price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id", ondelete="SET NULL"))   # DB-13
     legal_entity_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("legal_entities.id"))  # overrides org default at this location
     working_hours: Mapped[Optional[dict]] = mapped_column(JSON)  # build 136: {mon:{open,close,closed}, ...}
     # Build 144cm: stable creation order so listings are deterministic (the primary
@@ -326,9 +331,9 @@ class Location(OrgScoped, Base):
     # bug where /locations returned rows in random UUID order.
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     org: Mapped["Organisation"] = relationship(back_populates="locations")
-    orders: Mapped[list["Order"]] = relationship(back_populates="location")
+    orders: Mapped[list["Order"]] = relationship(back_populates="location", foreign_keys="Order.location_id")
     employees: Mapped[list["Employee"]] = relationship(back_populates="location")
-    stock_levels: Mapped[list["StockLevel"]] = relationship(back_populates="location")
+    stock_levels: Mapped[list["StockLevel"]] = relationship(back_populates="location", foreign_keys="StockLevel.location_id")
     order_statuses: Mapped[list["OrderStatus"]] = relationship(back_populates="location")
 
 # ─────────────────────────────────────────────
@@ -392,7 +397,7 @@ class Employee(OrgScoped, Base):
     # Sign-in emails are case-insensitive (migration ls144r3); the app stores them lowercase.
     __table_args__ = (Index("uq_employees_email_lower", text("lower(email)"), unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
     role_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("roles.id"))
     name: Mapped[str] = mapped_column(String(200))
@@ -446,7 +451,7 @@ class Shift(OrgScoped, Base):
     __tablename__ = "shifts"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
-    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
+    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -487,7 +492,7 @@ class Client(OrgScoped, Base):
     membership_offer_snoozed_until: Mapped[Optional[date]] = mapped_column(Date)
     client_type: Mapped[str] = mapped_column(String(20), default="person")  # person|organization
     is_supplier: Mapped[bool] = mapped_column(Boolean, default=False)
-    manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     payer_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     discount_card: Mapped[Optional[str]] = mapped_column(String(60), index=True)
     # 144hl — B2B billing details for documents (Orderry client print variables)
@@ -531,7 +536,7 @@ class Client(OrgScoped, Base):
     disc_materials_value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     disc_materials_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     devices: Mapped[list["Device"]] = relationship(back_populates="client")
-    orders: Mapped[list["Order"]] = relationship(back_populates="client")
+    orders: Mapped[list["Order"]] = relationship(back_populates="client", foreign_keys="Order.client_id")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client", foreign_keys="Invoice.client_id")
     custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)  # values for org custom client fields
 
@@ -566,8 +571,8 @@ class Device(OrgScoped, Base):
     # Build 144do (security): devices are now tenant-anchored directly. Previously
     # tenancy was inferred via client_id -> Client.org_id, which left company-owned
     # assets (client_id NULL) unscoped — a cross-tenant IDOR. Every asset query now
-    # filters on org_id. Nullable only to allow the backfill migration.
-    org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    # filters on org_id. NOT NULL since dbi01 (audit DB-14); ix_devices_org_serial & co lead with it.
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), nullable=False)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     owner_type: Mapped[str] = mapped_column(String(20), default="client")  # client|company
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"), index=True)  # warehouse the asset sits in
@@ -597,7 +602,7 @@ class Device(OrgScoped, Base):
     purchase_date: Mapped[Optional[date]] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     client: Mapped["Client"] = relationship(back_populates="devices")
-    orders: Mapped[list["Order"]] = relationship(back_populates="device")
+    orders: Mapped[list["Order"]] = relationship(back_populates="device", foreign_keys="Order.device_id")
 
 # ─────────────────────────────────────────────
 # ORDERS
@@ -643,8 +648,7 @@ class OrderStatus(Base):
     # the defaults several times over (migration ls144r1 removes the old copies).
     __table_args__ = (
         UniqueConstraint("org_id", "record_type", "key", name="uq_order_statuses_org_rt_key"),
-        Index("ix_order_statuses_org_id", "org_id"),
-    )
+    )   # DB-17: ix_order_statuses_org_id dropped (dbi01): the unique key above leads with org_id
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))
@@ -689,10 +693,11 @@ class Order(OrgScoped, Base):
         Index("ix_orders_org_created", "org_id", "created_at"),
         # Status tabs: filter org_id + status.
         Index("ix_orders_org_status", "org_id", "status"),
-        # 144ei — barcode is globally unique across ALL tenants. Declared exactly as the migrations
-        # build it (a lookup index + a separate unique index, see y5a7c9e1g3i5) so models and the
-        # migrated production schema match. Uniqueness is unchanged.
+        # 144ei — barcode is globally unique across ALL tenants (this unique index is also the
+        # lookup path: dbi01 dropped the duplicate plain ix_orders_barcode, audit DB-17).
         Index("uq_orders_barcode", "barcode", unique=True),
+        # SEC-12: tracking links are looked up by the token's SHA-256 (dbi02)
+        Index("uq_orders_public_token_hash", "public_token_hash", unique=True),
         # srch01: the search box's job number, anywhere in it, and as "WO12" = "WO-00012"
         _trgm_index("ix_orders_number_trgm", _search_flat("order_number")),
         Index("ix_orders_number_digits", "org_id",
@@ -701,7 +706,7 @@ class Order(OrgScoped, Base):
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     order_number: Mapped[str] = mapped_column(String(50))
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"), index=True)
@@ -709,8 +714,8 @@ class Order(OrgScoped, Base):
     manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)  # 144cp: the WO owner/manager (Orderry parity), distinct from the assigned specialist
     status: Mapped[str] = mapped_column(String(50), default="new")
     is_estimate: Mapped[bool] = mapped_column(Boolean, default=False)  # estimate vs work order
-    converted_order_id: Mapped[Optional[str]] = mapped_column(String)  # set on the estimate after it becomes an order
-    converted_from_id: Mapped[Optional[str]] = mapped_column(String)   # set on the order created from an estimate
+    converted_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"))  # set on the estimate after it becomes an order
+    converted_from_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"))   # set on the order created from an estimate
     signature: Mapped[Optional[str]] = mapped_column(Text)
     estimate_approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)  # Build 75: public estimate approval
     # E5 — estimate extras. After valid_until the customer can't approve online. revision counts the
@@ -760,10 +765,37 @@ class Order(OrgScoped, Base):
     # gc144g3 — {blob_id: "intake"|"before"|"after"|"damage"}: what a job photo shows, so a
     # before/after pair or a damage shot can be found again (unlabelled photos are just "photos").
     intake_photo_labels: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
-    public_token: Mapped[Optional[str]] = mapped_column(String(40), unique=True, index=True, default=lambda: secrets.token_urlsafe(16))  # 144cu — unique track link, never repeated
+    # SEC-12 (audit 2026-11-12): the customer tracking link's token is never stored in clear.
+    # Lookups compare its SHA-256 (public_token_hash); the token itself is kept only encrypted
+    # (public_token_enc, services/crypto) because documents and messages re-print the link. The
+    # link stops working N days after the job closes (services/track_links). `public_token` below
+    # is the token in clear, as before, for reading, setting (rotate) and comparing in queries.
+    # `legacy_public_token` is the old plaintext column, kept for the previous image until the
+    # contract release: new code never writes it (always NULL) and only finds links the previous
+    # image issued through it (during a deploy or after a rollback).
+    legacy_public_token: Mapped[Optional[str]] = mapped_column("public_token", String(40), unique=True, index=True)
+    public_token_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    public_token_enc: Mapped[Optional[str]] = mapped_column(Text)
+    public_token_issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    @hybrid_property
+    def public_token(self) -> Optional[str]:
+        from backend.services.track_links import reveal
+        return reveal(self)
+
+    @public_token.inplace.setter
+    def _public_token_setter(self, value: Optional[str]) -> None:
+        from backend.services.track_links import assign
+        assign(self, value)
+
+    @public_token.inplace.comparator
+    @classmethod
+    def _public_token_comparator(cls):
+        from backend.services.track_links import TokenComparator
+        return TokenComparator(cls)
     client_msg_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144ba: unread customer messages
     rec_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144bd: unread recommendation decisions (approve/decline)
-    barcode: Mapped[Optional[str]] = mapped_column(String(40), index=True, default=lambda: _uuid().replace("-", "")[:12].upper())  # Phase F scanner search; 144ei: globally unique via uq_orders_barcode (__table_args__)
+    barcode: Mapped[Optional[str]] = mapped_column(String(40), default=lambda: _uuid().replace("-", "")[:12].upper())  # Phase F scanner search; 144ei: globally unique via uq_orders_barcode (__table_args__)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -775,21 +807,26 @@ class Order(OrgScoped, Base):
     split_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     # "Continue as a linked job": the job this one carries on from (any job, open or closed).
     continued_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"), index=True)
-    client: Mapped[Optional["Client"]] = relationship(back_populates="orders")
-    device: Mapped[Optional["Device"]] = relationship(back_populates="orders")
-    location: Mapped["Location"] = relationship(back_populates="orders")
+    client: Mapped[Optional["Client"]] = relationship(back_populates="orders", foreign_keys=[client_id])
+    device: Mapped[Optional["Device"]] = relationship(back_populates="orders", foreign_keys=[device_id])
+    location: Mapped["Location"] = relationship(back_populates="orders", foreign_keys=[location_id])
     assigned_to: Mapped[Optional["Employee"]] = relationship(back_populates="assigned_orders", foreign_keys=[assigned_to_id])
     manager: Mapped[Optional["Employee"]] = relationship(foreign_keys=[manager_id])  # 144cp
-    lines: Mapped[list["OrderLine"]] = relationship(back_populates="order", cascade="all, delete-orphan")
-    status_logs: Mapped[list["OrderStatusLog"]] = relationship(back_populates="order", cascade="all, delete-orphan")
-    comments: Mapped[list["OrderComment"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    # Audit DB-12: a job's lines, status history and comments never go with it. There is no
+    # delete-orphan: code that removes a line deletes it explicitly (orders.delete_line), and
+    # passive_deletes="all" makes a delete of the job itself fail on the FK instead of
+    # silently nulling or removing its money rows.
+    lines: Mapped[list["OrderLine"]] = relationship(back_populates="order", foreign_keys="OrderLine.order_id",
+                                                    cascade="save-update, merge", passive_deletes="all")
+    status_logs: Mapped[list["OrderStatusLog"]] = relationship(back_populates="order", cascade="save-update, merge", passive_deletes="all")
+    comments: Mapped[list["OrderComment"]] = relationship(back_populates="order", cascade="save-update, merge", passive_deletes="all")
     tasks: Mapped[list["Task"]] = relationship(back_populates="order")
-    invoices: Mapped[list["Invoice"]] = relationship(back_populates="order")
+    invoices: Mapped[list["Invoice"]] = relationship(back_populates="order", foreign_keys="Invoice.order_id")
 
 class OrderLine(OrgScoped, Base):
     __tablename__ = "order_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     line_type: Mapped[str] = mapped_column(String(20))  # labour|part|fee
     ref_id: Mapped[Optional[str]] = mapped_column(String)
@@ -801,7 +838,7 @@ class OrderLine(OrgScoped, Base):
     technician_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     # Memberships: set by the server only, when a plan covers or discounts this line (the
     # selling line of a plan carries it too). Never accepted from the client.
-    membership_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    membership_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("memberships.id", ondelete="SET NULL"), index=True)
     work_share: Mapped[float] = mapped_column(Money(9, 4), default=1.0)  # for split lines (0.5/0.5)
     # 144av #2 — flat-rate/estimated labour hours we bill, to compare against actual clocked time.
     booked_hours: Mapped[float] = mapped_column(Float, default=0.0)
@@ -819,7 +856,7 @@ class OrderLine(OrgScoped, Base):
     tax_rate: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed
     total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
-    order: Mapped["Order"] = relationship(back_populates="lines")
+    order: Mapped["Order"] = relationship(back_populates="lines", foreign_keys=[order_id])
     # Several items per job: which of the job's items this line is for (null = the whole job).
     order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
     # Kits print as one line (kit1p01). A kit still explodes into these real lines (money, stock,
@@ -845,8 +882,8 @@ class OrderItem(OrgScoped, Base):
     __tablename__ = "order_items"
     __table_args__ = (UniqueConstraint("order_id", "asset_id", name="uq_order_items_order_asset"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"))
     asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
     label: Mapped[Optional[str]] = mapped_column(String(200))     # for items with no asset record
     complaint: Mapped[Optional[str]] = mapped_column(Text)
@@ -958,7 +995,7 @@ class ChatThread(OrgScoped, Base):
     channel: Mapped[str] = mapped_column(String(20), default="whatsapp")  # whatsapp|sms|email
     contact_phone: Mapped[Optional[str]] = mapped_column(String(160), index=True)  # C4: phone, email or social id
     contact_name: Mapped[Optional[str]] = mapped_column(String(200))
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"))
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 81: chat → work order
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
@@ -977,7 +1014,7 @@ class ChatMessage(OrgScoped, Base):
     __tablename__ = "chat_messages"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
-    thread_id: Mapped[str] = mapped_column(String, ForeignKey("chat_threads.id"), index=True)
+    thread_id: Mapped[str] = mapped_column(String, ForeignKey("chat_threads.id"))
     direction: Mapped[str] = mapped_column(String(5))  # in|out
     body: Mapped[str] = mapped_column(Text)
     author_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1047,8 +1084,8 @@ class Part(OrgScoped, Base):
     custom_data: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    stock_levels: Mapped[list["StockLevel"]] = relationship(back_populates="part")
-    movements: Mapped[list["StockMovement"]] = relationship(back_populates="part")
+    stock_levels: Mapped[list["StockLevel"]] = relationship(back_populates="part", foreign_keys="StockLevel.part_id")
+    movements: Mapped[list["StockMovement"]] = relationship(back_populates="part", foreign_keys="StockMovement.part_id")
 
 
 class Service(OrgScoped, Base):
@@ -1096,7 +1133,7 @@ class UserPref(OrgScoped, Base):
     __tablename__ = "user_prefs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
+    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     pref_key: Mapped[str] = mapped_column(String(120))
     value: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1152,7 +1189,7 @@ class PlatformAdmin(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # Admin panel sprint 1
-    role_id: Mapped[Optional[str]] = mapped_column(String, index=True)       # admin_roles.id; none = owner (legacy)
+    role_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("admin_roles.id"), index=True)       # admin_roles.id; none = owner (legacy)
     token_version: Mapped[int] = mapped_column(Integer, default=0)           # bump = every session ends
     mfa_secret: Mapped[Optional[str]] = mapped_column(Text)                  # encrypted at rest (crypto.encrypt)
     mfa_recovery: Mapped[Optional[str]] = mapped_column(Text)                # JSON of hashed single-use codes
@@ -1218,11 +1255,11 @@ class AdminActionLog(Base):
     __tablename__ = "admin_action_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
-    admin_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    admin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("platform_admins.id", ondelete="SET NULL"), index=True)
     admin_email: Mapped[Optional[str]] = mapped_column(String(200))
     action: Mapped[str] = mapped_column(String(60), index=True)
     outcome: Mapped[str] = mapped_column(String(20), default="allowed")    # allowed|refused|requested
-    org_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id", ondelete="SET NULL"), index=True)
     target: Mapped[Optional[str]] = mapped_column(String(120))
     before: Mapped[Optional[dict]] = mapped_column(JSON)
     after: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -1257,8 +1294,8 @@ class AdminApprovalRequest(OrgScoped, Base):
     """An action over someone's limit, waiting for the owner (e.g. a 30% discount)."""
     __tablename__ = "admin_approval_requests"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    requester_id: Mapped[str] = mapped_column(String, index=True)
-    org_id: Mapped[str] = mapped_column(String, index=True)
+    requester_id: Mapped[str] = mapped_column(String, ForeignKey("platform_admins.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     action: Mapped[str] = mapped_column(String(40))
     payload: Mapped[Optional[dict]] = mapped_column(JSON)
     reason: Mapped[Optional[str]] = mapped_column(String(500))
@@ -1273,8 +1310,8 @@ class AdminShopNote(OrgScoped, Base):
     """A note on a shop's admin timeline (call notes, emails sent, contact)."""
     __tablename__ = "admin_shop_notes"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, index=True)
-    admin_id: Mapped[Optional[str]] = mapped_column(String)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    admin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("platform_admins.id", ondelete="SET NULL"))
     kind: Mapped[str] = mapped_column(String(20), default="note")       # note|call|email
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1284,10 +1321,10 @@ class AdminAssignmentLog(OrgScoped, Base):
     """Who a shop was handed from and to (sales → account manager, someone leaving)."""
     __tablename__ = "admin_assignment_log"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, index=True)
-    from_admin_id: Mapped[Optional[str]] = mapped_column(String)
-    to_admin_id: Mapped[Optional[str]] = mapped_column(String)
-    by_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    from_admin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("platform_admins.id", ondelete="SET NULL"))
+    to_admin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("platform_admins.id", ondelete="SET NULL"))
+    by_admin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("platform_admins.id", ondelete="SET NULL"))
     reason: Mapped[Optional[str]] = mapped_column(String(300))
     at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -1377,8 +1414,8 @@ class StockLevel(OrgScoped, Base):
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)  # micro-location
     qty_available: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
     qty_reserved: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
-    part: Mapped["Part"] = relationship(back_populates="stock_levels")
-    location: Mapped["Location"] = relationship(back_populates="stock_levels")
+    part: Mapped["Part"] = relationship(back_populates="stock_levels", foreign_keys=[part_id])
+    location: Mapped["Location"] = relationship(back_populates="stock_levels", foreign_keys=[location_id])
 
 class StockMovement(OrgScoped, Base):
     __tablename__ = "stock_movements"
@@ -1398,7 +1435,7 @@ class StockMovement(OrgScoped, Base):
     ref_type: Mapped[Optional[str]] = mapped_column(String(50))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    part: Mapped["Part"] = relationship(back_populates="movements")
+    part: Mapped["Part"] = relationship(back_populates="movements", foreign_keys=[part_id])
 
 class TelephonyConfig(OrgScoped, Base):
     """B7: per-org telephony/VoIP settings. Provider-agnostic; a simulated
@@ -1433,7 +1470,7 @@ class Taggable(OrgScoped, Base):
     __tablename__ = "taggables"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    tag_id: Mapped[str] = mapped_column(String, ForeignKey("tags.id"), index=True)
+    tag_id: Mapped[str] = mapped_column(String, ForeignKey("tags.id"))
     entity_type: Mapped[str] = mapped_column(String(20), index=True)  # contact|order|chat
     entity_id: Mapped[str] = mapped_column(String, index=True)
     __table_args__ = (UniqueConstraint("tag_id", "entity_type", "entity_id", name="uq_taggable"),)
@@ -1461,7 +1498,8 @@ class PurchaseOrder(OrgScoped, Base):
     # second shop's first PO-00001 a 500.
     __table_args__ = (UniqueConstraint("org_id", "po_number", name="uq_purchase_orders_org_number"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    # NOT NULL since dbi01 (audit DB-14); uq_purchase_orders_org_number leads with it.
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), nullable=False)
     supplier_id: Mapped[str] = mapped_column(String, ForeignKey("suppliers.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     po_number: Mapped[str] = mapped_column(String(50))
@@ -1502,7 +1540,7 @@ class PurchaseOrder(OrgScoped, Base):
     charges_to_cost: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     supplier: Mapped["Supplier"] = relationship(back_populates="purchase_orders")
-    lines: Mapped[list["POLine"]] = relationship(back_populates="po", cascade="all, delete-orphan")
+    lines: Mapped[list["POLine"]] = relationship(back_populates="po", cascade="save-update, merge", passive_deletes="all")   # DB-12
 
 class POLine(OrgScoped, Base):
     __tablename__ = "po_lines"
@@ -1518,7 +1556,7 @@ class POLine(OrgScoped, Base):
 # ─────────────────────────────────────────────
 # FINANCE
 # ─────────────────────────────────────────────
-    reserved_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 94
+    reserved_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 94
 
 class Invoice(OrgScoped, Base):
     __tablename__ = "invoices"
@@ -1530,7 +1568,7 @@ class Invoice(OrgScoped, Base):
                       CheckConstraint(f"credited > -{MONEY_DUST}", name="credited_nonneg"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     invoice_number: Mapped[str] = mapped_column(String(50))
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     # 144dr — invoice loop. payer_client_id lets the bill go to a different party
@@ -1560,13 +1598,14 @@ class Invoice(OrgScoped, Base):
     einvoice_issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     einvoice_xml: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    order: Mapped[Optional["Order"]] = relationship(back_populates="invoices")
+    order: Mapped[Optional["Order"]] = relationship(back_populates="invoices", foreign_keys=[order_id])
     client: Mapped[Optional["Client"]] = relationship(back_populates="invoices", foreign_keys=[client_id])
-    payments: Mapped[list["Payment"]] = relationship(back_populates="invoice")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", foreign_keys="Payment.invoice_id")
+    # Audit DB-12: no delete cascade onto money rows (see Order.lines); lines are removed explicitly.
     order_links: Mapped[list["InvoiceOrder"]] = relationship(
-        back_populates="invoice", cascade="all, delete-orphan")
+        back_populates="invoice", cascade="save-update, merge", passive_deletes="all")
     lines: Mapped[list["InvoiceLine"]] = relationship(
-        cascade="all, delete-orphan")  # 144ed: free-form invoice lines
+        foreign_keys="InvoiceLine.invoice_id", cascade="save-update, merge", passive_deletes="all")  # 144ed: free-form invoice lines
 
 class DocumentSignature(OrgScoped, Base):
     """144ig — tamper-evident client e-signature on a document (estimate OR work order).
@@ -1625,7 +1664,7 @@ class InvoiceOrder(OrgScoped, Base):
     __table_args__ = (UniqueConstraint("invoice_id", "order_id", name="uq_invoice_order"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
-    invoice_id: Mapped[str] = mapped_column(String, ForeignKey("invoices.id"), index=True)
+    invoice_id: Mapped[str] = mapped_column(String, ForeignKey("invoices.id"))
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     invoice: Mapped["Invoice"] = relationship(back_populates="order_links")
@@ -1655,8 +1694,8 @@ class Payment(OrgScoped, Base):
     # refunds.payment_id already points here, and a cycle can't be created on SQLite.
     refund_id: Mapped[Optional[str]] = mapped_column(String, index=True)
     voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
-    invoice: Mapped["Invoice"] = relationship(back_populates="payments")
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
+    invoice: Mapped["Invoice"] = relationship(back_populates="payments", foreign_keys=[invoice_id])
 
 class CashShift(OrgScoped, Base):
     __tablename__ = "cash_shifts"
@@ -1664,7 +1703,7 @@ class CashShift(OrgScoped, Base):
     __table_args__ = (Index("uq_cash_shifts_open_location", "location_id", unique=True,
                             sqlite_where=text("closed_at IS NULL"), postgresql_where=text("closed_at IS NULL")),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     opened_by_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     opening_float: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
@@ -1731,7 +1770,7 @@ class Account(OrgScoped, Base):
     payment methods appear at checkout. Company-scoped (all locations) or per-location."""
     __tablename__ = "accounts"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))  # null = company-wide
     name: Mapped[str] = mapped_column(String(120))
     icon: Mapped[str] = mapped_column(String(40), default="wallet")
@@ -1794,7 +1833,7 @@ class CashFlowItem(OrgScoped, Base):
     """A tag categorising a transaction (Sales, Rent, Payroll, Supplier payment…)."""
     __tablename__ = "cash_flow_items"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     name: Mapped[str] = mapped_column(String(120))
     direction: Mapped[str] = mapped_column(String(10), default="income")  # income|expense
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1808,7 +1847,7 @@ class Transaction(OrgScoped, Base):
     # Finance P&L / fee aggregates: filter org_id + txn_type.
     __table_args__ = (Index("ix_transactions_org_type", "org_id", "txn_type"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id"), index=True)
     txn_type: Mapped[str] = mapped_column(String(20))  # income|expense|transfer|invoice_payment|fee
     amount: Mapped[float] = mapped_column(Money(12, 2))        # signed: + in, - out
@@ -1832,7 +1871,7 @@ class Transaction(OrgScoped, Base):
     # later delete/correction (matches Orderry's strikethrough ledger).
     status: Mapped[str] = mapped_column(String(12), default="active", server_default="active")  # active|corrected|deleted
     balance_after: Mapped[Optional[float]] = mapped_column(Money(12, 2))  # frozen snapshot at post time
-    reverses_txn_id: Mapped[Optional[str]] = mapped_column(String)  # set on a correction delta row
+    reverses_txn_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("transactions.id"), index=True)  # set on a correction delta row
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
     voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
 
@@ -1907,14 +1946,14 @@ class Task(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     title: Mapped[str] = mapped_column(String(500))
     description: Mapped[Optional[str]] = mapped_column(Text)
-    assigned_to_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    assigned_to_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     assignee_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)  # 144ex: multiple technicians (primary owner stays assigned_to_id)
-    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)   # Build 86
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"), index=True)       # Build 86
-    location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))           # Build 86
-    parent_task_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("tasks.id"))            # Build 86: subtasks
+    location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"), index=True)           # Build 86
+    parent_task_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("tasks.id"), index=True)            # Build 86: subtasks
     completed_on_time: Mapped[Optional[bool]] = mapped_column(Boolean)  # Build 86: on-time analysis
     status: Mapped[str] = mapped_column(String(30), default="todo")       # TASK_STATUSES
     priority: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # tk01: 0 normal, 1 high, 2 urgent, 3 reserved
@@ -2082,7 +2121,7 @@ class FormLayout(OrgScoped, Base):
     __tablename__ = "form_layouts"
     __table_args__ = (UniqueConstraint("org_id", "entity", "type_id", name="uq_form_layout"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     entity: Mapped[str] = mapped_column(String(32))
     type_id: Mapped[Optional[str]] = mapped_column(String)  # work-order type (nullable); '' for none
     data: Mapped[Optional[list]] = mapped_column(JSON, default=list)
@@ -2139,7 +2178,7 @@ class Recommendation(OrgScoped, Base):
     __tablename__ = "recommendations"
     __table_args__ = (Index("ix_recommendations_org_remind_after", "org_id", "remind_after"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     title: Mapped[str] = mapped_column(String(300))
     note: Mapped[Optional[str]] = mapped_column(Text)          # "why we recommend this"
@@ -2149,7 +2188,7 @@ class Recommendation(OrgScoped, Base):
     unit_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     media_data: Mapped[Optional[str]] = mapped_column(Text)    # inline photo proof (data URL)
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
-    order_line_id: Mapped[Optional[str]] = mapped_column(String)  # set once approved
+    order_line_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_lines.id", ondelete="SET NULL"), index=True)  # set once approved
     # Several items per job: which of the job's items this is for (null = the whole job).
     order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
     urgency: Mapped[Optional[str]] = mapped_column(String(10))          # now | soon | None (plain words on the page)
@@ -2253,7 +2292,7 @@ class Warehouse(OrgScoped, Base):
     """
     __tablename__ = "warehouses"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     name: Mapped[str] = mapped_column(String(120))
     kind: Mapped[str] = mapped_column(String(10), default="product")   # product|asset
     scope: Mapped[str] = mapped_column(String(10), default="location")  # location|company
@@ -2383,8 +2422,11 @@ class EmployeeBalanceLedger(OrgScoped, Base):
     Positive = accrual (commission/bonus/base), negative = claw-back/penalty/payout.
     `idempotency_key` blocks the same accrual from posting twice (no double-dipping)."""
     __tablename__ = "employee_balance_ledger"
+    # Audit DB-15: the idempotency key is unique per shop (it was global). dbi01 builds it.
+    __table_args__ = (Index("uq_employee_balance_ledger_org_idempotency_key", "org_id", "idempotency_key",
+                            unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
     entry_type: Mapped[str] = mapped_column(String(20))  # commission|base|bonus|penalty|clawback|payout
     amount: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)  # signed
@@ -2392,7 +2434,7 @@ class EmployeeBalanceLedger(OrgScoped, Base):
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("commission_rules.id"))
     ref_type: Mapped[Optional[str]] = mapped_column(String(40))  # order|order_line|refund|payroll_run
     ref_id: Mapped[Optional[str]] = mapped_column(String, index=True)
-    idempotency_key: Mapped[Optional[str]] = mapped_column(String(120), unique=True, index=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(120))
     # Groups a commission with its reversals across close/reopen cycles: every accrual of the
     # same (event, line/order, rule, employee) and every claw-back of it share this key, so the
     # engine can see what is still open (the group's net) instead of trusting one fixed key.
@@ -2438,7 +2480,7 @@ class PayrollRun(OrgScoped, Base):
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # The cashbox the pay came out of and the expense transaction posted there (P&L opex).
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
-    cash_txn_id: Mapped[Optional[str]] = mapped_column(String)
+    cash_txn_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("transactions.id"), index=True)
     voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
@@ -2503,7 +2545,7 @@ class SerialEvent(OrgScoped, Base):
     __table_args__ = (Index("ix_serial_events_item_created", "item_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    item_id: Mapped[str] = mapped_column(String, ForeignKey("serialized_items.id", ondelete="CASCADE"))
+    item_id: Mapped[str] = mapped_column(String, ForeignKey("serialized_items.id"))   # DB-12: the passport outlives nothing it describes (no CASCADE, dbi01)
     kind: Mapped[str] = mapped_column(String(20))   # received|moved|used|returned|sold|written_off|restored|converted|counted
     ref_type: Mapped[Optional[str]] = mapped_column(String(30))
     ref_id: Mapped[Optional[str]] = mapped_column(String)
@@ -2537,7 +2579,8 @@ class AssetProductConversion(OrgScoped, Base):
     asset_group_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_groups.id"))
     serial_identifier: Mapped[Optional[str]] = mapped_column(String(120), index=True)
     status: Mapped[str] = mapped_column(String(20), default="completed")  # completed|reversed
-    reversed_by_id: Mapped[Optional[str]] = mapped_column(String)   # the opposite conversion's id
+    reversed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_product_conversions.id", ondelete="SET NULL",
+                                                                     name="fk_asset_product_conversions_reversed_by_id"))   # the opposite conversion's id
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
@@ -2670,7 +2713,7 @@ class WebhookEndpoint(OrgScoped, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     description: Mapped[Optional[str]] = mapped_column(String(200))
     kind: Mapped[str] = mapped_column(String(20), default="endpoint", server_default="endpoint")  # endpoint|automation
-    source_id: Mapped[Optional[str]] = mapped_column(String, index=True)   # automation rule id
+    source_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("automation_rules.id", ondelete="SET NULL"), index=True)   # automation rule id
     previous_secret: Mapped[Optional[str]] = mapped_column(String(500))
     previous_secret_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     failing_since: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2844,12 +2887,12 @@ class Sale(OrgScoped, Base):
     # Audit DB-05 / FIN-17: one sale number per shop.
     __table_args__ = (Index("uq_sales_org_number", "org_id", "sale_number", unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     sale_number: Mapped[str] = mapped_column(String(20))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
-    seller_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
-    account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
+    seller_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
+    account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"), index=True)
     total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     total_cost: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     discount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # whole-sale discount amount
@@ -2857,7 +2900,7 @@ class Sale(OrgScoped, Base):
     tax: Mapped[float] = mapped_column(Money(12, 2), default=0.0, server_default="0")
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    coupon_id: Mapped[Optional[str]] = mapped_column(String)          # the coupon used, so a void can give the use back
+    coupon_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("coupons.id", ondelete="SET NULL"))          # the coupon used, so a void can give the use back
     voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete sales"): kept, but reversed
     voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
@@ -2941,7 +2984,7 @@ class ClientReturn(OrgScoped, Base):
     # Lists page newest-first inside one shop (audit 29 Oct 2026).
     __table_args__ = (Index("ix_client_returns_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -2999,7 +3042,7 @@ class StockTransfer(OrgScoped, Base):
                         name="status_valid"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     transfer_number: Mapped[str] = mapped_column(String(20))
     from_location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     to_location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -3054,7 +3097,7 @@ class Feedback(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     token: Mapped[str] = mapped_column(String(40), index=True, default=lambda: _uuid().replace("-", "")[:16])
     system: Mapped[str] = mapped_column(String(20), default="five_point")
     rating: Mapped[Optional[int]] = mapped_column(Integer)  # 1-5, 0/1 for like, 0-10 for nps
@@ -3391,11 +3434,11 @@ class GiftCard(OrgScoped, Base):
         CheckConstraint("initial_value >= 0", name="initial_value_nonneg"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     code: Mapped[str] = mapped_column(String(40), index=True)          # e.g. GC-8F3K2P
     initial_value: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
     balance: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -3425,7 +3468,7 @@ class Coupon(OrgScoped, Base):
                         name="uses_in_range"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     # 144bi: a coupon issued to a specific returning client (null = public code).
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)
@@ -3461,7 +3504,7 @@ class NumberSequence(OrgScoped, Base):
     __tablename__ = "number_sequences"
     __table_args__ = (UniqueConstraint("org_id", "doc_type", "scope_key", name="uq_numseq_scope"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     doc_type: Mapped[str] = mapped_column(String(20))     # order|invoice|inquiry|sale|po|transfer
     scope_key: Mapped[str] = mapped_column(String(60), default="org")
     template: Mapped[str] = mapped_column(String(60))
@@ -3545,7 +3588,7 @@ class PriceTypeItem(OrgScoped, Base):
     __table_args__ = (UniqueConstraint("price_type_id", "item_type", "item_id", name="uq_ptitem"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    price_type_id: Mapped[str] = mapped_column(String, ForeignKey("price_types.id"), index=True)
+    price_type_id: Mapped[str] = mapped_column(String, ForeignKey("price_types.id"))
     item_type: Mapped[str] = mapped_column(String(10))   # product|service
     item_id: Mapped[str] = mapped_column(String)
     price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
@@ -3570,7 +3613,7 @@ class Directory(OrgScoped, Base):
     __tablename__ = "directories"
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_directory_key"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     key: Mapped[str] = mapped_column(String(40))          # asset_type|manufacturer|cancel_reason|lead_source|...
     name: Mapped[str] = mapped_column(String(80))
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -3583,7 +3626,7 @@ class DirectoryItem(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     directory_id: Mapped[str] = mapped_column(String, ForeignKey("directories.id"), index=True)
     value: Mapped[str] = mapped_column(String(120))
-    parent_id: Mapped[Optional[str]] = mapped_column(String)   # for hierarchical lists (mfr -> model)
+    parent_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("directory_items.id", ondelete="SET NULL"))   # for hierarchical lists (mfr -> model)
     # 144hi — per-location visibility (Orderry): null = visible at every location
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
@@ -3607,7 +3650,7 @@ class AssetGroup(OrgScoped, Base):
     __tablename__ = "asset_groups"
     __table_args__ = (UniqueConstraint("org_id", "template_key", "key", name="uq_asset_group_key"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     template_key: Mapped[str] = mapped_column(String(30), index=True)   # mobile_phone|computer|auto|...
     key: Mapped[str] = mapped_column(String(50))          # stable slug, e.g. "phone"
     label: Mapped[str] = mapped_column(String(80))        # display, e.g. "Phone"
@@ -3631,7 +3674,7 @@ class AssetBrand(OrgScoped, Base):
               postgresql_where=text("asset_group_id IS NULL")),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     template_key: Mapped[str] = mapped_column(String(30), index=True)
     asset_group_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_groups.id"), index=True)
     name: Mapped[str] = mapped_column(String(120))
@@ -3647,7 +3690,7 @@ class AssetModel(OrgScoped, Base):
     __table_args__ = (UniqueConstraint("org_id", "template_key", "brand_id", "name",
                                        name="uq_asset_model_name"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     template_key: Mapped[str] = mapped_column(String(30), index=True)
     brand_id: Mapped[str] = mapped_column(String, ForeignKey("asset_brands.id"), index=True)
     asset_group_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_groups.id"), index=True)
@@ -3669,7 +3712,7 @@ class AssetIdentifierRule(OrgScoped, Base):
     __table_args__ = (UniqueConstraint("org_id", "template_key", "asset_group_id",
                                        name="uq_asset_ident_rule"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     template_key: Mapped[str] = mapped_column(String(30), index=True)
     asset_group_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("asset_groups.id"), index=True)
     primary_kind: Mapped[str] = mapped_column(String(16))          # imei|vin|hin|serial|asset_tag|barcode|engine_serial
@@ -3739,7 +3782,7 @@ class Call(OrgScoped, Base):
     __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),
                       Index("uq_calls_org_provider_external", "org_id", "provider", "external_id", unique=True))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # aircall|twilio|zadarma|manual
     direction: Mapped[str] = mapped_column(String(10), default="inbound") # inbound|outbound
     from_number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3940,7 +3983,7 @@ class WriteOff(OrgScoped, Base):
                             sqlite_where=text("number IS NOT NULL"), postgresql_where=text("number IS NOT NULL")),
                       CheckConstraint(_one_of("status", ("posted", "reverted")), name="status_valid"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     number: Mapped[Optional[str]] = mapped_column(String(40))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)
     reason: Mapped[Optional[str]] = mapped_column(String(120))
@@ -3982,7 +4025,7 @@ class Posting(OrgScoped, Base):
                       CheckConstraint(_one_of("status", ("posted", "deleted")), name="status_valid"),
                       CheckConstraint(_one_of("settlement", ("balance", "cash")), name="settlement_valid"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     number: Mapped[Optional[str]] = mapped_column(String(40))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)
     supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id"), index=True)
@@ -4221,7 +4264,7 @@ class OrgIntegrationCredential(OrgScoped, Base):
     """
     __tablename__ = "org_integration_credentials"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     provider: Mapped[str] = mapped_column(String(20))     # stripe|square|sumup|twilio|smtp|meta
     data_enc: Mapped[Optional[str]] = mapped_column(Text)  # Fernet-encrypted JSON of the fields
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -4256,7 +4299,7 @@ class CreditNote(OrgScoped, Base):
     __table_args__ = (Index("ix_credit_notes_org_created", "org_id", "created_at"),
                       UniqueConstraint("org_id", "number", name="uq_credit_notes_org_number"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     number: Mapped[Optional[str]] = mapped_column(String(50))          # set on issue
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
@@ -4272,8 +4315,9 @@ class CreditNote(OrgScoped, Base):
     canceled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    # Audit DB-12: no delete cascade (a draft's lines are deleted explicitly: services/credit_notes).
     lines: Mapped[list["CreditNoteLine"]] = relationship(
-        cascade="all, delete-orphan", order_by="CreditNoteLine.sort_order")
+        cascade="save-update, merge", passive_deletes="all", order_by="CreditNoteLine.sort_order")
 
 
 class CreditNoteLine(OrgScoped, Base):
@@ -4282,7 +4326,7 @@ class CreditNoteLine(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     credit_note_id: Mapped[str] = mapped_column(
-        String, ForeignKey("credit_notes.id", ondelete="CASCADE"), index=True)
+        String, ForeignKey("credit_notes.id"), index=True)     # DB-12: no ON DELETE CASCADE (dbi01)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     description: Mapped[str] = mapped_column(String(500), default="")
     qty: Mapped[float] = mapped_column(Money(12, 3), default=1.0)
@@ -4303,7 +4347,7 @@ class PaymentTerminal(OrgScoped, Base):
                       Index("uq_payment_terminal_live_reader", "provider", "reader_id", unique=True,
                             sqlite_where=text("test_mode = 0"), postgresql_where=text("NOT test_mode")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     provider: Mapped[str] = mapped_column(String(20))
     reader_id: Mapped[str] = mapped_column(String(120))
     label: Mapped[str] = mapped_column(String(120))
@@ -4401,7 +4445,7 @@ class IdempotencyRecord(OrgScoped, Base):
     Rows older than 48h are swept by services/idempotency.sweep()."""
     __tablename__ = "idempotency_records"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     key: Mapped[str] = mapped_column(String(80))
     endpoint: Mapped[str] = mapped_column(String(80))
     # sha256 of what was asked (path ids + body), when the endpoint passes it: the same key sent
@@ -4446,7 +4490,7 @@ class ApiIdempotencyKey(OrgScoped, Base):
     __tablename__ = "api_idempotency_keys"
     __table_args__ = (UniqueConstraint("org_id", "key_id", "idem_key", name="uq_api_idempotency_key"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     key_id: Mapped[str] = mapped_column(String, ForeignKey("api_keys.id"), index=True)
     idem_key: Mapped[str] = mapped_column(String(255))
     route: Mapped[str] = mapped_column(String(80))
@@ -4514,7 +4558,7 @@ class Membership(OrgScoped, Base):
         CheckConstraint("price >= 0", name="price_nonneg"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     plan_id: Mapped[str] = mapped_column(String, ForeignKey("membership_plans.id"), index=True)
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
     device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
@@ -4541,7 +4585,7 @@ class MembershipAsset(OrgScoped, Base):
     __table_args__ = (UniqueConstraint("membership_id", "device_id", name="uq_membership_asset"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"))
     device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"), index=True)
 
 
@@ -4572,7 +4616,7 @@ class MembershipUsage(OrgScoped, Base):
     plan_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("membership_plan_items.id"))
     device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
-    order_line_id: Mapped[Optional[str]] = mapped_column(String)
+    order_line_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_lines.id", ondelete="SET NULL"))
     qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
     value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     term_start: Mapped[date] = mapped_column(Date)                         # which plan year it counts in
@@ -4592,3 +4636,59 @@ class OperatorTextUsage(OrgScoped, Base):
 # Audit 2026-11-12 DB-10: composite indexes for filters the reports actually run (migration corg01).
 Index("ix_sales_org_id_location_id_created_at", Sale.org_id, Sale.location_id, Sale.created_at)
 Index("ix_appointments_org_id_employee_id", Appointment.org_id, Appointment.employee_id)
+
+
+# ── Audit 2026-11-12 DB-03: the database refuses cross-shop references (migration dbi01) ──────────
+# A money or stock row names its parent by (org_id, id), not by id alone, so a payment, job line,
+# stock movement or level that points at another shop's job, client, product, employee… is
+# rejected by the database itself, whatever writes it (ORM, Core insert, bulk update, raw SQL).
+# The ORM flush guard (backend/db/tenancy.py) still runs first and answers with a friendly 404.
+# Each parent gets UNIQUE (org_id, id) for the keys to reference. The plain FK on the id column
+# stays (its name and ON DELETE are unchanged), so relationships between these tables name their
+# foreign_keys explicitly. dbi01 builds the same lists (a test compares them).
+TENANT_PARENTS = ("accounts", "cash_flow_items", "cash_shifts", "clients", "devices", "employees",
+                  "invoices", "locations", "order_items", "order_lines", "orders", "parts", "sales",
+                  "storage_bins", "warehouses")
+TENANT_FKS = (
+    ("payments", "order_id", "orders"), ("payments", "invoice_id", "invoices"),
+    ("payments", "account_id", "accounts"), ("payments", "client_id", "clients"),
+    ("payments", "shift_id", "cash_shifts"), ("payments", "received_by_id", "employees"),
+    ("payments", "voided_by_id", "employees"),
+    ("transactions", "account_id", "accounts"), ("transactions", "shift_id", "cash_shifts"),
+    ("transactions", "cash_flow_item_id", "cash_flow_items"), ("transactions", "employee_id", "employees"),
+    ("transactions", "voided_by_id", "employees"),
+    ("order_lines", "order_id", "orders"), ("order_lines", "order_item_id", "order_items"),
+    ("order_lines", "technician_id", "employees"), ("order_lines", "discount_by_id", "employees"),
+    ("invoice_lines", "invoice_id", "invoices"), ("invoice_lines", "order_line_id", "order_lines"),
+    ("sale_lines", "sale_id", "sales"),
+    ("stock_movements", "part_id", "parts"), ("stock_movements", "location_id", "locations"),
+    ("stock_movements", "warehouse_id", "warehouses"), ("stock_movements", "bin_id", "storage_bins"),
+    ("stock_movements", "created_by_id", "employees"),
+    ("stock_levels", "part_id", "parts"), ("stock_levels", "location_id", "locations"),
+    ("stock_levels", "warehouse_id", "warehouses"), ("stock_levels", "bin_id", "storage_bins"),
+    ("orders", "client_id", "clients"), ("orders", "device_id", "devices"), ("orders", "location_id", "locations"),
+    ("invoices", "order_id", "orders"), ("invoices", "client_id", "clients"),
+    ("stock_reservations", "part_id", "parts"),
+)
+
+
+def tenant_fk_name(child: str, col: str) -> str:
+    return f"fk_{child}_{col}_org"
+
+
+for _parent in TENANT_PARENTS:
+    _pt = Base.metadata.tables[_parent]
+    Index(f"uq_{_parent}_org_id_id", _pt.c.org_id, _pt.c.id, unique=True)
+for _child, _col, _parent in TENANT_FKS:
+    Base.metadata.tables[_child].append_constraint(ForeignKeyConstraint(
+        ["org_id", _col], [f"{_parent}.org_id", f"{_parent}.id"], name=tenant_fk_name(_child, _col)))
+del _parent, _pt, _child, _col
+
+
+@event.listens_for(Order, "before_insert")
+def _order_gets_a_track_link(_mapper, _conn, order) -> None:
+    """Every new job has a tracking link from birth (it was a column default before SEC-12 split
+    the token into a hash and a ciphertext, which one default can't fill together)."""
+    if order.public_token_hash is None and order.legacy_public_token is None:
+        from backend.services.track_links import new_token
+        order.public_token = new_token()
