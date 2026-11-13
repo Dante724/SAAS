@@ -170,8 +170,37 @@ async def _validate_auto_keys(db: AsyncSession, org_id: str, keys: list[AutoStat
     return out
 
 
+_UPSELL_TARGETS = {"service": "Service", "labor": "Service", "labour": "Service", "product": "Part"}
+
+
+async def _stale_upsell_refs(db: AsyncSession, org_id: str, pairs) -> set:
+    """Re-review N2: the upsell ids among `pairs` ((upsell_kind, upsell_ref_id), …) that name no
+    catalog row of this shop any more (deleted, or junk saved before SEC-08). A kind that names no
+    catalog table (a "custom" upsell) is never stale: there is nothing to look up."""
+    from backend import models as m
+    by_model: dict = {}
+    for kind, ref in pairs:
+        model = _UPSELL_TARGETS.get((kind or "").strip().lower())
+        if ref and model:
+            by_model.setdefault(model, set()).add(ref)
+    stale = set()
+    for model_name, ids in by_model.items():
+        model = getattr(m, model_name)
+        found = set((await db.execute(select(model.id).where(
+            model.org_id == org_id, model.id.in_(list(ids))))).scalars().all())
+        stale |= ids - found
+    return stale
+
+
 async def _write_structure(db: AsyncSession, org_id: str, t: ChecklistTemplate, data: TemplateIn):
     """(Re)write a template's steps/sections/items from the payload."""
+    # Re-review N2: an upsell id the template already held that no longer resolves comes back from
+    # the editor unchanged; it is cleared on save rather than refused, so the template can still be
+    # saved. A NEW unknown id is still refused by the soft-ref check (SEC-08).
+    held = (await db.execute(select(ChecklistTemplateItem.upsell_kind, ChecklistTemplateItem.upsell_ref_id).where(
+        ChecklistTemplateItem.template_id == t.id, ChecklistTemplateItem.upsell_ref_id.isnot(None)))).all() \
+        if t.id else []
+    stale_held = await _stale_upsell_refs(db, org_id, held) if held else set()
     t.name = data.name
     t.type_id = data.type_id
     t.scope = data.scope if data.scope in ("all", "selected") else "all"
@@ -212,7 +241,8 @@ async def _write_structure(db: AsyncSession, org_id: str, t: ChecklistTemplate, 
                     description=it.description, field_kind=fk, options=json.dumps(it.options or []),
                     required=it.required, client_visible=it.client_visible,
                     affects_result=it.affects_result, sort_order=order_i,
-                    upsell_ref_id=it.upsell_ref_id, upsell_kind=it.upsell_kind,
+                    upsell_ref_id=(None if it.upsell_ref_id in stale_held else it.upsell_ref_id),
+                    upsell_kind=it.upsell_kind,
                     upsell_price=it.upsell_price, upsell_threshold=it.upsell_threshold,
                     upsell_comparator=(it.upsell_comparator if it.upsell_comparator in ("lt", "gt", "fail") else None)))
                 order_i += 1
@@ -473,6 +503,15 @@ async def instantiate_template(db: AsyncSession, org_id: str, order_id: str, t: 
     tree = await _steps_tree(db, t.id)
     if not any(sec["items"] for st in tree for sec in st["sections"]):
         return None
+    # Re-review N2: an upsell id the template holds that no longer resolves is left off the job's
+    # copy (logged), instead of failing the soft-ref check and with it the job's create or status move.
+    stale = await _stale_upsell_refs(db, org_id, [(it.get("upsell_kind"), it.get("upsell_ref_id"))
+                                                  for st in tree for sec in st["sections"] for it in sec["items"]])
+    if stale:
+        import logging
+        logging.getLogger("tekly.checklists").warning(
+            "checklist template %s: %d upsell link(s) to deleted catalog items left off the job's copy",
+            t.id, len(stale))
     cl = OrderChecklist(org_id=org_id, order_id=order_id, template_id=t.id,
                         title=t.name, status="in_progress", author_id=author_id)
     db.add(cl)
@@ -487,7 +526,8 @@ async def instantiate_template(db: AsyncSession, org_id: str, order_id: str, t: 
                     field_kind=it["field_kind"], options=json.dumps(it["options"]),
                     required=it["required"], client_visible=it["client_visible"],
                     affects_result=it["affects_result"], sort_order=order_i,
-                    upsell_ref_id=it.get("upsell_ref_id"), upsell_kind=it.get("upsell_kind"),
+                    upsell_ref_id=(None if it.get("upsell_ref_id") in stale else it.get("upsell_ref_id")),
+                    upsell_kind=it.get("upsell_kind"),
                     upsell_price=it.get("upsell_price"), upsell_threshold=it.get("upsell_threshold"),
                     upsell_comparator=it.get("upsell_comparator")))
                 order_i += 1

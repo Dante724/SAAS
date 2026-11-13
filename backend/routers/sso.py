@@ -10,7 +10,9 @@ domain and calls `/config/{id}/verify-domain`. Until then `discover` ignores the
 `authorize` refuses it. An unproven claim blocks nobody, so a squatter can't lock the real owner
 out; once one shop proves a domain, no other shop can claim or prove it.
 """
+import logging
 import secrets
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -63,31 +65,81 @@ def _allowed_redirect(uri: str) -> bool:
 
 
 TXT_PREFIX = "tekly-sso-verification="
+log = logging.getLogger("tekly.sso")
+
+# Re-review N7: a proof is not forever. The domain can change hands or the record can be removed,
+# so a verified connection is re-checked in DNS once it is RECHECK_AFTER old (the daily sweep
+# below, or the shop pressing Verify again), and stops routing anything once it is VERIFY_TTL old
+# without a fresh check. A record found missing on a re-check revokes the proof at once.
+VERIFY_TTL = timedelta(days=30)
+RECHECK_AFTER = timedelta(days=7)
+VERIFY_LIMIT = 10              # verify-domain presses per connection per hour (each is outbound DNS)
+VERIFY_ORG_LIMIT = 30          # and per shop per hour
 
 
 async def lookup_txt(domain: str) -> list[str]:
-    """The domain's TXT records as plain strings ([] when there are none or DNS can't answer).
-    A long record arrives as several <=255-byte strings; they are joined back into one."""
+    """The domain's own TXT records as plain strings ([] when there are none or DNS can't answer).
+    A long record arrives as several <=255-byte strings; they are joined back into one.
+
+    Re-review N7: an answer reached through a CNAME is ignored. The proof must be published on the
+    claimed name itself: a dangling CNAME (sso.acme.test -> an abandoned host someone else now
+    controls) would otherwise let that someone prove acme's subdomain."""
     import dns.asyncresolver
     import dns.exception
+    import dns.name
     try:
         answer = await dns.asyncresolver.resolve(domain, "TXT", lifetime=8)
     except (dns.exception.DNSException, OSError):
         return []
+    asked = dns.name.from_text(domain)
+    if getattr(answer, "canonical_name", asked) != asked:
+        log.info("sso: TXT for a claimed domain came through a CNAME; ignored")
+        return []
     return [b"".join(r.strings).decode("utf-8", "replace") for r in answer]
+
+
+def _fresh_since():
+    from backend.services.dates import now_utc
+    return now_utc() - VERIFY_TTL
+
+
+def proven(conn) -> bool:
+    """Is this connection's email domain proven, and the proof still fresh?"""
+    return conn.domain_verified_at is not None and conn.domain_verified_at >= _fresh_since()
+
+
+def email_matches_connection(conn, email: str) -> bool:
+    """The check the OIDC/SAML callback MUST make before signing anyone in (audit SEC-07,
+    re-review N7): the email the identity provider asserts is exactly in the connection's proven
+    domain (no subdomains, no look-alikes), and that proof is still fresh. Otherwise any IdP a shop
+    points at could assert any address and sign in as someone of another shop.
+
+    TODO(sso-callback): the callback does not exist yet (`authorize` stops at the IdP redirect).
+    When it ships it must call this with the verified `email` claim (and require
+    `email_verified`), refuse a mismatch, and only then look up the employee in `conn.org_id`."""
+    email = (email or "").strip().lower()
+    if email.count("@") != 1 or not getattr(conn, "enabled", False) or not proven(conn):
+        return False
+    return email.rsplit("@", 1)[1] == (conn.email_domain or "").lower()
 
 
 def _verification(s: SsoConnection) -> Optional[dict]:
     if not s.email_domain:
         return None
-    return {"record_type": "TXT", "host": s.email_domain, "value": f"{TXT_PREFIX}{s.domain_token}",
-            "verified": s.domain_verified_at is not None,
-            "verified_at": s.domain_verified_at.isoformat() if s.domain_verified_at else None}
+    # A connection from before SEC-07 has no token yet: it is minted by verify-domain (a write),
+    # never by reading the settings page (re-review N7: GET /config used to mint and commit).
+    return {"record_type": "TXT", "host": s.email_domain,
+            "value": f"{TXT_PREFIX}{s.domain_token}" if s.domain_token else None,
+            "verified": proven(s),
+            "verified_at": s.domain_verified_at.isoformat() if s.domain_verified_at else None,
+            "expires_at": (s.domain_verified_at + VERIFY_TTL).isoformat() if s.domain_verified_at else None}
 
 
 def _active():
-    """Connections allowed to route sign-ins: enabled, with a proven email domain."""
-    return (SsoConnection.enabled == True, SsoConnection.domain_verified_at.isnot(None))  # noqa: E712
+    """Connections allowed to route sign-ins: enabled, with a proven email domain whose proof is
+    still fresh (re-review N7)."""
+    return (SsoConnection.enabled == True, SsoConnection.domain_verified_at.isnot(None),  # noqa: E712
+            SsoConnection.domain_verified_at >= _fresh_since())
 
 
 def _ser(s: SsoConnection, *, redact=True) -> dict:
@@ -114,11 +166,6 @@ async def get_config(
 ):
     rows = (await db.execute(select(SsoConnection).where(
         SsoConnection.org_id == current.org_id))).scalars().all()
-    fill = [s for s in rows if s.email_domain and not s.domain_token]
-    for s in fill:           # connections from before SEC-07 get their token on first view
-        s.domain_token = secrets.token_urlsafe(24)
-    if fill:
-        await db.commit()
     return {"items": [_ser(s) for s in rows]}
 
 
@@ -163,31 +210,82 @@ async def verify_domain(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     """Check the domain's DNS for this connection's TXT record; when it's there the domain is
-    proven and the connection starts routing sign-ins (if enabled)."""
+    proven and the connection starts routing sign-ins (if enabled). Every press checks DNS again
+    (re-review N7): a record still there renews the proof, one that was removed revokes it."""
     conn = (await db.execute(select(SsoConnection).where(
         SsoConnection.id == conn_id, SsoConnection.org_id == current.org_id))).scalar_one_or_none()
     if not conn:
         raise HTTPException(404, "SSO config not found")
     if not conn.email_domain:
         raise HTTPException(422, "This connection has no email domain to verify")
+    # Re-review N7: each press is an outbound DNS lookup of a name the caller chose.
+    from backend.services.ratelimit import aenforce
+    await aenforce("sso_verify_conn", conn.id, VERIFY_LIMIT, 3600)
+    await aenforce("sso_verify_org", current.org_id, VERIFY_ORG_LIMIT, 3600)
     if await _proven_elsewhere(db, conn.email_domain, current.org_id):
         raise HTTPException(409, f"{conn.email_domain} is already linked to another account")
-    if conn.domain_verified_at is None:
-        if not conn.domain_token:
-            conn.domain_token = secrets.token_urlsafe(24)
-            await db.commit()
-        want = f"{TXT_PREFIX}{conn.domain_token}"
-        if want not in [t.strip() for t in await lookup_txt(conn.email_domain)]:
-            raise HTTPException(422, f"No TXT record \"{want}\" found on {conn.email_domain} yet. "
-                                     "Add it at your DNS provider, wait for it to publish, then try again.")
-        from backend.services.dates import now_utc
-        conn.domain_verified_at = now_utc()
-        await audit_record(db, org_id=current.org_id, actor_id=current.id, action="sso.domain_verified",
-                           entity_type="sso_connection", entity_id=conn.id,
-                           diff={"email_domain": conn.email_domain})
+    if not conn.domain_token:
+        conn.domain_token = secrets.token_urlsafe(24)
         await db.commit()
-        await db.refresh(conn)
+    if not await _check_dns(db, conn, actor_id=current.id):
+        await db.commit()
+        want = f"{TXT_PREFIX}{conn.domain_token}"
+        raise HTTPException(422, f"No TXT record \"{want}\" found on {conn.email_domain} yet. "
+                                 "Add it at your DNS provider (on that exact name, not through a CNAME), "
+                                 "wait for it to publish, then try again.")
+    await db.commit()
+    await db.refresh(conn)
     return _ser(conn)
+
+
+async def _check_dns(db: AsyncSession, conn: SsoConnection, *, actor_id: Optional[str] = None) -> bool:
+    """Look the proof up now: found renews `domain_verified_at`, missing revokes it (both audited
+    when the state changes). Not committed. Returns whether the record was found."""
+    from backend.services.dates import now_utc
+    found = f"{TXT_PREFIX}{conn.domain_token}" in [t.strip() for t in await lookup_txt(conn.email_domain)]
+    was = conn.domain_verified_at is not None
+    if found:
+        conn.domain_verified_at = now_utc()
+        if not was:
+            await audit_record(db, org_id=conn.org_id, actor_id=actor_id, action="sso.domain_verified",
+                               entity_type="sso_connection", entity_id=conn.id,
+                               diff={"email_domain": conn.email_domain})
+    elif was:
+        conn.domain_verified_at = None
+        await audit_record(db, org_id=conn.org_id, actor_id=actor_id, action="sso.domain_unverified",
+                           entity_type="sso_connection", entity_id=conn.id,
+                           diff={"email_domain": conn.email_domain, "reason": "TXT record no longer found"})
+    return found
+
+
+async def recheck_domains(db: AsyncSession) -> int:
+    """Re-check every proof older than RECHECK_AFTER (renew or revoke). Run daily by the job
+    runner below; returns how many were checked. Platform-wide (no tenant): it reads and writes
+    only sso_connections rows, each under its own shop's id."""
+    from backend.services.dates import now_utc
+    due = (await db.execute(select(SsoConnection).where(
+        SsoConnection.domain_verified_at.isnot(None), SsoConnection.domain_token.isnot(None),
+        SsoConnection.domain_verified_at < now_utc() - RECHECK_AFTER)
+        .execution_options(skip_tenant_filter=True))).scalars().all()
+    for conn in due:
+        await _check_dns(db, conn)
+    await db.commit()
+    return len(due)
+
+
+def _register_recheck() -> None:
+    from backend.core.jobs import job_runner
+
+    @job_runner.every(24 * 3600, "sso-domain-recheck", delay_first=True)
+    async def _sweep() -> None:
+        from backend.db.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            n = await recheck_domains(db)
+            if n:
+                log.info("sso-domain-recheck: re-checked %d domain proof(s)", n)
+
+
+_register_recheck()
 
 
 @router.delete("/config/{conn_id}")

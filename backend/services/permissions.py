@@ -229,13 +229,17 @@ OPT_IN = {"can_override_reservation", "can_change_kit_price", "can_use_sense_sug
 
 
 def role_allows(role, perm_key: str) -> bool:
-    """The one permission check. No role (the owner) = everything.
+    """The one permission check, for a role.
+
+    No role = nothing (audit SEC-11: it used to mean "the owner", so a caller that loaded a role by
+    id and got None, a deleted or dangling role, granted everything). The shop owner is decided by
+    `auth.has_perm` (is_shop_owner), never here.
 
     Explicit roles (perms_explicit) are default-deny: only a code set to True is granted, so
     a permission added later stays off until someone turns it on. Legacy roles keep the old
     deny-wins rule (granted unless set to False) until they're snapshotted."""
     if not role:
-        return True
+        return False
     perms = role.permissions or {}
     if not getattr(role, "perms_explicit", False) and perms.get("all") == "write":
         return True               # the shop creator's legacy "admin" role: everything
