@@ -14,7 +14,6 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from sqlalchemy import case, func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
@@ -319,19 +318,19 @@ class CommissionEngine:
             EmployeeBalanceLedger.idempotency_key == EmployeeBalanceLedger.normalize_key(idempotency_key)))).scalar_one_or_none()
         if existing:
             return False
-        # A savepoint, so losing the race on the key undoes only this row (N-11: this rolled back
-        # the caller's whole session, and the caller then committed and reported success).
-        try:
-            async with self.db.begin_nested():
-                self.db.add(EmployeeBalanceLedger(
-                    org_id=self.org_id, employee_id=employee_id, entry_type=entry_type,
-                    amount=amount, event=event, rule_id=rule_id, ref_type=ref_type,
-                    ref_id=ref_id, idempotency_key=idempotency_key, note=note,
-                    accrual_key=accrual_key))
-                await self.db.flush()
-        except IntegrityError:
-            return False
-        return True
+        # INSERT … ON CONFLICT DO NOTHING: losing the race on the key skips only this row and never
+        # raises, so the caller's session is untouched (N-11: an IntegrityError here rolled back
+        # the caller's whole session, which then committed and reported success). Not a savepoint:
+        # on SQLite the driver opens no transaction before SAVEPOINT, so its RELEASE committed
+        # early and concurrent requests failed with "database is locked" (8 in 20 runs of
+        # test_payroll_run_is_paid_once_per_key). A Core insert skips the ORM validator, so the
+        # keys are normalised here exactly as EmployeeBalanceLedger._fit_key does.
+        from backend.db.database import insert_ignore
+        return await insert_ignore(
+            self.db, EmployeeBalanceLedger, org_id=self.org_id, employee_id=employee_id, entry_type=entry_type,
+            amount=amount, event=event, rule_id=rule_id, ref_type=ref_type, ref_id=ref_id,
+            idempotency_key=EmployeeBalanceLedger.normalize_key(idempotency_key), note=note,
+            accrual_key=EmployeeBalanceLedger.normalize_key(accrual_key))   # id, created_at: column defaults
 
     async def _group_state(self, accrual_key: str) -> tuple[Decimal, int, int]:
         """(net still open, accruals posted, rows) for one accrual group."""
