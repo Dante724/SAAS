@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.models import PushSubscription, StaffNotification
 from backend.services.dates import now_utc
+from backend.services.money import json_default
 
 log = logging.getLogger("tekly.push")
 
@@ -180,7 +181,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict, *, c
                 webpush,
                 subscription_info={"endpoint": s.endpoint,
                                    "keys": {"p256dh": s.p256dh, "auth": s.auth}},
-                data=json.dumps(payload),
+                data=json.dumps(payload, default=json_default),   # DB-08: Decimal amounts as numbers
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims=dict(claims),
                 timeout=PUSH_TIMEOUT_S,
