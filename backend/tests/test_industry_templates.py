@@ -185,7 +185,11 @@ async def test_brand_model_chain(db):
 
 # ── legacy-data safety (new columns are nullable) ────────────────────────────
 async def test_new_columns_default_null_for_legacy_records(db):
-    d = Device(owner_type="company", asset_type="Device")
+    from backend.models import Organisation
+    org = Organisation(name="Legacy Co", account_id="TK-LEGACY01")
+    db.add(org)
+    await db.flush()
+    d = Device(org_id=org.id, owner_type="company", asset_type="Device")   # a shop is required (DB-14)
     db.add(d)
     await db.commit()
     await db.refresh(d)

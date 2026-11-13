@@ -30,6 +30,16 @@ STATUSES = ("draft", "issued", "canceled")
 _HUNDRED = Decimal(100)
 
 
+def drop_lines(cn: CreditNote) -> None:
+    """Delete a DRAFT's lines (issued notes are never edited or deleted)."""
+    from sqlalchemy.orm import object_session
+    sess = object_session(cn)
+    for line in list(cn.lines):
+        if sess is not None and line in sess:
+            sess.delete(line)
+    cn.lines.clear()
+
+
 def line_amounts(qty, unit_price, tax_rate) -> tuple[Decimal, Decimal, Decimal]:
     """(net, tax, total) for one line, each rounded half-up to the cent."""
     net = d2(Decimal(str(qty or 0)) * Decimal(str(unit_price or 0)))
@@ -38,8 +48,9 @@ def line_amounts(qty, unit_price, tax_rate) -> tuple[Decimal, Decimal, Decimal]:
 
 
 def build_lines(cn: CreditNote, lines: list[dict]) -> None:
-    """Replace a draft's lines and recompute its totals."""
-    cn.lines.clear()
+    """Replace a draft's lines and recompute its totals. The old lines are deleted explicitly:
+    CreditNote.lines has no delete-orphan cascade (audit DB-12)."""
+    drop_lines(cn)
     sub = tax_total = Decimal(0)
     for i, l in enumerate(lines):
         net, tax, total = line_amounts(l.get("qty"), l.get("unit_price"), l.get("tax_rate"))

@@ -235,19 +235,24 @@ async def test_postgres_plan_reads_the_trigram_indexes(db):
     # org_id ties with the (org_id, job digits) one on a near-empty table, which would make the digits
     # check a coin toss. Look them up rather than naming them, so a new org_id-first index (like the
     # uq_order_org_number constraint) can't bring the coin toss back; constraint-backed ones are
-    # dropped as constraints.
+    # dropped as constraints. Only orders' own unique/primary/exclusion constraints own an index:
+    # foreign keys on other tables that point at an orders key (DB-03's invoices -> orders
+    # (org_id, id)) share its conindid too, so they must not be read as the index's owner. CASCADE
+    # drops those FKs with the key; all of it is rolled back below.
     rivals = (await conn.exec_driver_sql(
-        "SELECT i.relname, c.conname FROM pg_index x"
+        "SELECT DISTINCT i.relname, c.conname FROM pg_index x"
         " JOIN pg_class i ON i.oid = x.indexrelid"
         " JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = x.indkey[0]"
-        " LEFT JOIN pg_constraint c ON c.conindid = x.indexrelid"
+        " LEFT JOIN pg_constraint c ON c.conindid = x.indexrelid AND c.conrelid = x.indrelid"
+        "  AND c.contype IN ('p', 'u', 'x')"
         " WHERE x.indrelid = 'orders'::regclass AND a.attname = 'org_id'"
         " AND i.relname <> 'ix_orders_number_digits'")).all()
     for index_name, constraint_name in rivals:
         if constraint_name:
-            await conn.exec_driver_sql(f'ALTER TABLE orders DROP CONSTRAINT "{constraint_name}"')
+            await conn.exec_driver_sql(f'ALTER TABLE orders DROP CONSTRAINT "{constraint_name}" CASCADE')
         else:
-            await conn.exec_driver_sql(f'DROP INDEX "{index_name}"')
+            # CASCADE: DB-03's composite FKs may sit on a plain unique index (uq_orders_org_id_id)
+            await conn.exec_driver_sql(f'DROP INDEX "{index_name}" CASCADE')
     try:
         for name, q in expect:
             plan = "\n".join(r[0] for r in (await conn.exec_driver_sql("EXPLAIN " + _pg(q))).all())

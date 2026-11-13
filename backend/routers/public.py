@@ -58,10 +58,14 @@ async def _load(db: AsyncSession, token: str, *, action: bool = False) -> Order:
     looking stays open: the customer's device may still be in the shop (services/org_live)."""
     if not token:
         raise HTTPException(404, "Not found")
+    # SEC-12: compares the token's SHA-256 (services/track_links), never a stored plaintext
     row = await db.execute(select(Order).where(Order.public_token == token))
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    from backend.services.track_links import is_expired
+    if is_expired(order):
+        raise HTTPException(404, "This link has expired. Ask the shop to send you a new one.")
     set_tenant(db, order.org_id)   # the rest of this request only sees this order's shop
     if action:
         from backend.services.org_live import assert_public_live

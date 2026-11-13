@@ -77,9 +77,10 @@ schema the previous image still works with.
 | Payment soft-void (#218) | pv01 | Safe: new nullable columns only. |
 | Wave 2 schema rules (#221) | w2b01 | Safe for normal use. The new unique indexes and CHECKs also bind the old code: an action the old code allowed and the new rules refuse (a second open drawer at a location, a duplicate code, a negative stock count) gets a database error (500) instead of a bad row. |
 | Exact decimals (#222) | dec08 | Safe, not verified against the old image: the rate/qty columns are NUMERIC now; old code declares them Float, and SQLAlchemy reads NUMERIC into float and binds floats into it. Values are stored rounded to the new scale. |
+| Tenant keys, FKs, hashed track links (audit DB-03/10/12–15/17, SEC-12) | dbi01, dbi02, dbi03 | **Safe on Postgres.** devices/purchase_orders.org_id became NOT NULL behind the same BEFORE INSERT fill trigger as corg01, so the old image's inserts keep working. The new keys bind the old code too: a write naming another shop's record, or a link to a coupon/membership/order line/transaction that doesn't exist, gets a database error (500) instead of a bad row; normal use never does. Tracking links: the old plaintext column is kept and still filled for links issued before the upgrade, so the old image opens those; a link the new image issued (or rotated) has no plaintext and opens again only after rolling forward. dbi03 adds order_lines.created_at with a server default, so lines the old image inserts are stamped too. SQLite (dev) has no triggers: don't roll a dev database back across this. |
 
 A database `alembic downgrade` across these is never needed for an image rollback. If one is
-needed anyway, it runs in reverse order (dec08, w2b01, pv01, then corg01), and corg01's downgrade
+needed anyway, it runs in reverse order (dbi03, dbi02, dbi01, dec08, w2b01, pv01, then corg01), and corg01's downgrade
 drops org_id from 23 tables: take a backup first.
 
 **Rule for new migrations: NOT NULL and type changes go expand -> contract.** A migration that
@@ -95,7 +96,10 @@ writes differently, ships in steps, and each step is safe with the previous imag
 
 A release that can't be split this way is listed in the table above as **not rollback-safe**,
 with what to do instead. The corg01/corg02 triggers are such a bridge: drop them in a later
-release once no image from before #219 can be started again.
+release once no image from before #219 can be started again. dbi01's fill triggers on devices and
+purchase_orders are the same kind of bridge. dbi02 is the expand half of hashing the tracking-link
+tokens; its **contract** (a later release, once no image from before dbi02 can start) hashes any row
+still holding only a plaintext token, then empties `orders.public_token` and drops it.
 
 ### Migrations and live traffic
 
@@ -121,11 +125,19 @@ behind it until it commits. Time each one on a restored copy of production first
 |---|---|---|
 | corg01 (#219) | One table at a time, briefly: adding the column is instant, the backfill commits every 5000 rows, the NOT NULL check is validated without blocking writes, indexes build `CONCURRENTLY`. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
 | w2b01 (#221) | One transaction: the data repairs, then the CHECKs (ACCESS EXCLUSIVE on stock_levels, invoices, time_entries, stock_transfers, gift_cards, coupons, purchase_returns, write_offs, postings, memberships, each for a full scan) and the unique indexes (SHARE on cash_shifts, time_entries, memberships, sales, stock_transfers, write_offs, purchase_returns, postings, coupons, gift_cards: reads go on, writes wait). All held until the end. | Yes at scale: the till (sales, stock, invoices) can't write meanwhile. Seconds at today's sizes. |
+| dbi01 | One short step at a time, each committed on its own: devices/purchase_orders backfilled 5000 rows per batch and made NOT NULL through a CHECK added NOT VALID and VALIDATEd; 32 indexes built and 46 dropped `CONCURRENTLY`; 58 foreign keys added `NOT VALID` (a SHARE ROW EXCLUSIVE lock on the table and its parent for milliseconds, no scan: writes on those two wait that long) and then VALIDATEd (reads and writes go on). The two cascade swaps (credit_note_lines, serial_events) are one ALTER each (drop + add NOT VALID), then VALIDATE. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
+| dbi02 | Three nullable columns on orders and one on organisations (instant), tokens hashed 2000 orders per batch (row locks only), one unique index built `CONCURRENTLY`. | No. |
+| dbi03 | order_lines.created_at added and given a default (both catalog-only, instant), then existing lines stamped 1000 jobs per batch, each batch its own transaction (row locks only). | No. |
 | dec08 (#222) | One transaction: 30 tables rewritten, one ALTER each (organisations, orders, order_lines, transactions, stock_movements, stock_levels, sale_lines, invoice_lines are the busy ones), all ACCESS EXCLUSIVE (no reads or writes) until the end. Peak extra disk: about one copy of each table. | **Yes.** Stop the app (or show maintenance) while it runs. |
 
-Both w2b01 and dec08 check the data first and stop with counts (nothing changed) on what they
+w2b01, dec08 and dbi01 check the data first and stop with counts (nothing changed) on what they
 can't repair: w2b01 on unknown status values, dec08 on values NUMERIC can't hold (out of range,
-±Infinity, NaN). w2b01 renames duplicate document numbers and gift-card/coupon codes (the oldest
+±Infinity, NaN), dbi01 on rows that point at another shop's record, devices/POs that no link gives
+a shop, links to transactions or required links that point at nothing, and payroll idempotency
+keys used twice in one shop. Before deploying dbi01 run `python scripts/find_cross_shop_rows.py`
+against production (read-only): it should print only `ok` lines; it lists the ids dbi01 only
+counts. dbi01 sets other links that point at a row that doesn't exist to NULL (a dead id is all
+that is lost) and logs the count per column (`alembic.dbi01`). w2b01 renames duplicate document numbers and gift-card/coupon codes (the oldest
 keeps its code, the others get `-2`, `-3`…) and records each rename in the shop's audit log
 (`gift_card.code_renamed`, `coupon.code_renamed`, `sale.sale_number_renamed`…): tell the shop to
 check it, since a customer holding a renamed card or coupon must now use the new code.
@@ -218,3 +230,11 @@ Enable bucket versioning and keep the bucket private (the app streams files thro
 - Run once against the production DB (both read-only):
   `python scripts/find_default_passwords.py` and `python scripts/find_duplicate_invoice_numbers.py`.
 - Turn on error tracking and alerts (see `PROD-HARDENING.md`).
+
+## 7. Closing a shop (offboarding)
+
+`backend/services/offboarding.offboard_org` exports every row the shop owns (secrets left out) and
+then switches it off: the shop is inactive with `offboarded_at` set, its staff are deactivated and
+signed out, and its API keys stop working. Nothing is deleted: there is no hard purge, because
+payments and invoices must usually be kept for years. If and when offboarded shops are purged is an
+owner/legal decision still to be made. The docstring shows how to run it.

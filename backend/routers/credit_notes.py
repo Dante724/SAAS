@@ -204,6 +204,8 @@ async def delete_credit_note(
     cn = await _load(db, current.org_id, cn_id, lock=True)
     if cn.status != "draft":
         raise HTTPException(409, "Only a draft can be deleted. Cancel an issued credit note instead.")
+    svc.drop_lines(cn)          # no cascade onto lines (audit DB-12): a draft's go explicitly
+    await db.flush()
     await db.delete(cn)
     await db.commit()
     return {"ok": True}

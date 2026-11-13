@@ -96,14 +96,39 @@ async def test_tax_exception_target_must_be_this_shops(client, tenant):
 @pytest.mark.asyncio
 async def test_unchanged_dangling_soft_id_does_not_block_other_edits(client, tenant, db):
     """Only a soft id being written is checked: a row that already holds a stale one (from before
-    this check) can still be edited in other ways."""
+    this check) can still be edited in other ways. organisations.price_type_*_id stay soft (an FK
+    would make organisations <-> price_types circular), so a stale one can still exist there."""
     from sqlalchemy import update
 
-    from backend.models import Location
+    from backend.models import Organisation
     me = (await client.get("/api/auth/me", headers=tenant)).json()
-    await db.execute(update(Location).where(Location.id == me["location_id"])
-                     .values(price_type_id="deleted-long-ago"))
+    await db.execute(update(Organisation).where(Organisation.id == me["org_id"])
+                     .values(price_type_tickets_id="deleted-long-ago"))
     await db.commit()
+    mine = await _price_type(client, tenant)
+    r = await client.put("/api/pricing/defaults", json={"price_type_sales_id": mine}, headers=tenant)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_a_location_can_no_longer_hold_a_dangling_price_list(client, tenant, db):
+    """locations.price_type_id became a real FK in dbi01 (audit DB-13): the database refuses a stale
+    id outright, and the migration's orphan rule cleared the ones that existed (set to NULL: a
+    nullable, non-money link), so "edit a location holding a stale id" can't arise any more."""
+    from sqlalchemy import update
+    from sqlalchemy.exc import IntegrityError
+
+    from backend.models import Location
+    from backend.tests.test_dbi_migrations import migration
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    with pytest.raises(IntegrityError):
+        await db.execute(update(Location).where(Location.id == me["location_id"])
+                         .values(price_type_id="deleted-long-ago"))
+        await db.commit()
+    await db.rollback()
+    dbi01 = migration("dbi01_tenant_keys_and_indexes")
+    rule = next(r for r in dbi01.SOFT_FKS if r[:2] == ("locations", "price_type_id"))
+    assert rule[3] == "SET NULL" and rule[4] is False        # orphans are cleared, not a stop
     r = await client.put(f"/api/staff/locations/{me['location_id']}", json={"name": "Renamed"},
                          headers=tenant)
     assert r.status_code == 200, r.text
