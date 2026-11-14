@@ -5,6 +5,11 @@ approval whose period holds it, until a manager corrects or confirms it with the
 (PATCH /timeclock/entries/{id}, PATCH /timeclock/shifts/{id}), which clears the flag and writes an
 audit row. The refusal names each flagged item by person, shop day and why it was flagged.
 
+Only the clock that pays the person counts (owner, on #255): staff paid from shop attendance
+(Employee.hourly_basis == "attendance", how timesheet approval and attendance wages pick the
+source) are held up only by flagged shifts; everyone else (labour, the default) only by flagged
+time entries. A flag on the other clock stays visible but blocks nothing.
+
 The period is the one the approval itself uses: a window of shop days on the person's clock, as
 naive-UTC [start, end) bounds (timesheet approval and attendance wages use the person's zone; a
 payroll accrual uses the shop's, as its ledger sums do). An item counts when it started inside it.
@@ -17,10 +22,16 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from backend.models import AuditLog, Employee, Shift, TimeEntry, TimeEntryAudit
-from backend.services.dates import utc_to_wall
+from backend.services.dates import utc_iso, utc_to_wall
 
 AUTO_STOP_HOURS = 12        # = timeclock.AUTO_STOP_HOURS (a service doesn't import a router; a test keeps them equal)
 SHIFT_CAP_HOURS = 16        # = timeclock.SHIFT_CAP_HOURS
+
+
+def paid_from_attendance(hourly_basis: Optional[str]) -> bool:
+    """The pay-source rule payroll already uses (timeclock approve paths, payroll.attendance-wages):
+    Employee.hourly_basis "attendance" pays from shifts, anything else (null = labour) from entries."""
+    return (hourly_basis or "labour") == "attendance"
 
 
 def _day_text(d: date) -> str:
@@ -34,17 +45,20 @@ def _hours(v) -> str:
 
 async def flagged_time(db, org_id: str, employee_ids: Iterable[str], start: datetime, end: datetime,
                        tz: Optional[str], *, entries: bool = True, shifts: bool = True) -> list[dict]:
-    """Every flagged, not voided time entry and every flagged shift of these people that started
-    in [start, end), oldest first, each as {kind, id, employee_id, employee_name, date, reason}."""
-    ids = [i for i in employee_ids if i]
-    if not ids:
-        return []
-    names = {i: n for i, n in (await db.execute(select(Employee.id, Employee.name).where(
-        Employee.org_id == org_id, Employee.id.in_(ids)))).all()}
+    """The flagged items of these people that started in [start, end) on the clock that pays each
+    of them: not voided time entries for labour staff, shifts for attendance staff. Oldest first,
+    each as {kind, id, employee_id, employee_name, date, reason, started_at, ended_at} (the times
+    prefill the screen's Edit form). `entries` / `shifts` narrow it
+    further to one clock (an approval of that clock only)."""
+    emps = (await db.execute(select(Employee.id, Employee.name, Employee.hourly_basis).where(
+        Employee.org_id == org_id, Employee.id.in_([i for i in employee_ids if i])))).all()
+    names = {i: n for i, n, _ in emps}
+    by_shift = [i for i, _, basis in emps if paid_from_attendance(basis)]
+    by_entry = [i for i, _, _ in emps if i not in by_shift]
     out: list[tuple[datetime, dict]] = []
-    if entries:
+    if entries and by_entry:
         rows = (await db.execute(select(TimeEntry).where(
-            TimeEntry.org_id == org_id, TimeEntry.employee_id.in_(ids), TimeEntry.needs_review == True,  # noqa: E712
+            TimeEntry.org_id == org_id, TimeEntry.employee_id.in_(by_entry), TimeEntry.needs_review == True,  # noqa: E712
             TimeEntry.state != "void", TimeEntry.started_at >= start, TimeEntry.started_at < end)
             .order_by(TimeEntry.started_at, TimeEntry.id))).scalars().all()
         self_edited = set()
@@ -66,10 +80,11 @@ async def flagged_time(db, org_id: str, employee_ids: Iterable[str], start: date
                 why = "timer cut short where the next entry starts"
             out.append((e.started_at, {"kind": "time_entry", "id": e.id, "employee_id": e.employee_id,
                                        "employee_name": who, "date": utc_to_wall(e.started_at, tz).date(),
-                                       "reason": why}))
-    if shifts:
+                                       "reason": why, "started_at": utc_iso(e.started_at),
+                                       "ended_at": utc_iso(e.ended_at)}))
+    if shifts and by_shift:
         rows = (await db.execute(select(Shift).where(
-            Shift.employee_id.in_(ids), Shift.needs_review == True,  # noqa: E712
+            Shift.employee_id.in_(by_shift), Shift.needs_review == True,  # noqa: E712
             Shift.started_at >= start, Shift.started_at < end)
             .order_by(Shift.started_at, Shift.id))).scalars().all()
         capped: dict = {}
@@ -92,7 +107,8 @@ async def flagged_time(db, org_id: str, employee_ids: Iterable[str], start: date
                 why = "shift flagged for a manager to check"
             out.append((s.started_at, {"kind": "shift", "id": s.id, "employee_id": s.employee_id,
                                        "employee_name": who, "date": utc_to_wall(s.started_at, tz).date(),
-                                       "reason": why}))
+                                       "reason": why, "started_at": utc_iso(s.started_at),
+                                       "ended_at": utc_iso(s.ended_at)}))
     out.sort(key=lambda x: (x[0], x[1]["kind"], x[1]["id"]))
     return [f for _, f in out]
 

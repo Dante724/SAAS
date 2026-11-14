@@ -1140,8 +1140,9 @@ async def approve_entry(
         tz = await _emp_tz(db, current.org_id, e.employee_id)
         flagged = [f for f in await flagged_time(db, current.org_id, [e.employee_id], e.started_at,
                                                  e.started_at + timedelta(seconds=1), tz, shifts=False)
-                   if f["id"] == e.id]
-        raise HTTPException(409, blocked_detail(flagged))
+                   if f["id"] == e.id]          # empty when this person is paid from attendance
+        if flagged:
+            raise HTTPException(409, blocked_detail(flagged))
     _audit(db, e, "approve", current.id, field="state", old=e.state, new="approved")
     e.state = "approved"
     e.approved_by_id = current.id

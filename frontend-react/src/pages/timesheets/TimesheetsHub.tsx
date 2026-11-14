@@ -15,6 +15,7 @@ import { fmtServerTime } from "../../lib/serverTime";
 import { loadFailed } from "../../lib/notice";
 import { buttonClass } from "../../components/Button";
 import { theadRowClass } from "../../components/Table";
+import NeedsReviewList, { flaggedFrom, type Flagged } from "./NeedsReviewList";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -42,6 +43,8 @@ export default function TimesheetsHub() {
   const [sched, setSched] = useState<any[] | null>(null);
   const [cmp, setCmp] = useState<any | null>(null);
   const [addSched, setAddSched] = useState(false);
+  // Decision 6: what a refused approval says needs a manager's review first (null = nothing).
+  const [review, setReview] = useState<{ key: number; items: Flagged[] } | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
   useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(loadFailed("the staff list")); }, []);
@@ -57,7 +60,11 @@ export default function TimesheetsHub() {
   useEffect(() => { loadSched(); }, [empId, from, to]); // eslint-disable-line
   async function delSched(id: string) { try { await api.del(`/schedules/${id}`); loadSched(); } catch (e: any) { flash(e.message); } }
 
-  async function approve() { try { await api.post("/timeclock/timesheet/approve", { employee_id: empId, date_from: from, date_to: to }); flash("Timesheet approved"); load(); } catch (e: any) { flash(e.message); } }
+  async function approve() {
+    try { await api.post("/timeclock/timesheet/approve", { employee_id: empId, date_from: from, date_to: to }); setReview(null); flash("Timesheet approved"); load(); }
+    catch (e: any) { const f = flaggedFrom(e); if (f) setReview({ key: Date.now(), items: f }); else flash(e.message); }
+  }
+  useEffect(() => { setReview(null); }, [empId, from, to]);
   async function voidEntry(id: string) { if (!(await confirmDialog("Void this entry?", { danger: true, confirmLabel: "Void" }))) return; try { await api.del(`/timeclock/entries/${id}`); load(); } catch (e: any) { flash(e.message); } }
   async function reopen(id: string) { try { await api.post(`/timeclock/entries/${id}/reopen`, {}); load(); } catch (e: any) { flash(e.message); } }
 
@@ -79,6 +86,8 @@ export default function TimesheetsHub() {
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">From</label><DateField mode="date" value={from} onChange={setFrom} className="w-40" /></div>
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To</label><DateField mode="date" value={to} onChange={setTo} className="w-40" /></div>
         </div>
+
+        {review && <NeedsReviewList key={review.key} items={review.items} onDone={() => { setReview(null); flash("All reviewed. Approve the range again."); load(); }} />}
 
         {/* summary */}
         <PageSummary stats={[

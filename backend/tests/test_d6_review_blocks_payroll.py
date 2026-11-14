@@ -109,6 +109,7 @@ async def test_flagged_entry_blocks_timesheet_approval_with_names_days_and_reaso
     [f] = d["flagged"]
     assert f["employee_name"] == "Ana Silva" and f["date"] == "2026-08-05" and f["kind"] == "time_entry"
     assert "12 h" in f["reason"]                           # a timer stopped at the 12 h cap
+    assert (f["started_at"], f["ended_at"]) == ("2026-08-05T09:00:00Z", "2026-08-05T21:00:00Z")   # for Edit
     assert "5 Aug 2026" in d["message"]
     # nothing was approved or paid
     assert (await _fresh(db, TimeEntry, ok)).state == "stopped"
@@ -314,3 +315,76 @@ async def test_review_reasons_use_the_clocks_own_limits():
     from backend.services import time_review
     assert time_review.AUTO_STOP_HOURS == timeclock.AUTO_STOP_HOURS
     assert time_review.SHIFT_CAP_HOURS == timeclock.SHIFT_CAP_HOURS
+
+
+# ── only the clock that pays the person blocks (owner, on #255) ──────────────────────────────────
+# hourly_basis "attendance" is paid from shifts; anything else (null = labour) from job time entries.
+async def test_labour_staff_are_not_blocked_by_a_flagged_shift(client, db):
+    H, org, _ = await _register(client)
+    emp, _ = await _teammate(client, H, await _role(db, org))
+    await _entry(db, org, emp, "2026-08-03T09:00:00", 4)
+    await _shift(db, org, emp, "2026-08-04T08:00:00", 16, needs_review=True)
+    assert (await _approve_window(client, H, emp, "2026-08-01", "2026-08-31")).status_code == 200
+    r = await client.post("/api/payroll/calculation/accrue", json={"employee_id": emp, "month": "2026-08"}, headers=H)
+    assert r.status_code == 201, r.text
+
+
+async def test_attendance_staff_are_not_blocked_by_a_flagged_time_entry(client, db):
+    H, org, _ = await _register(client)
+    emp, _ = await _teammate(client, H, await _role(db, org))
+    await _attendance(db, emp)
+    eid = await _entry(db, org, emp, "2026-08-05T09:00:00", 12, needs_review=True)
+    assert (await _approve_window(client, H, emp, "2026-08-01", "2026-08-31")).status_code == 200
+    r = await client.post("/api/payroll/run", headers=H, json={
+        "employee_id": emp, "period_start": "2026-08-01", "period_end": "2026-08-31"})
+    assert r.status_code == 201, r.text
+    from backend.models import TimeEntry
+    assert (await _fresh(db, TimeEntry, eid)).needs_review is True      # still flagged, just not blocking
+
+
+async def test_attendance_staff_can_approve_a_flagged_entry_alone(client, db):
+    H, org, _ = await _register(client)
+    emp, _ = await _teammate(client, H, await _role(db, org))
+    await _attendance(db, emp)
+    eid = await _entry(db, org, emp, "2026-08-05T09:00:00", 12, needs_review=True)
+    r = await client.post(f"/api/timeclock/entries/{eid}/approve", headers=H)
+    assert r.status_code == 200 and r.json()["wage_posted"] == 0, r.text
+
+
+async def test_flags_on_both_clocks_only_the_paying_one_blocks(client, db):
+    H, org, _ = await _register(client)
+    lab, _ = await _teammate(client, H, await _role(db, org), name="Lena Labour")
+    att, _ = await _teammate(client, H, await _role(db, org), name="Alex Attend")
+    await _attendance(db, att)
+    for p in (lab, att):
+        await _entry(db, org, p, "2026-08-05T09:00:00", 12, needs_review=True)
+        await _shift(db, org, p, "2026-08-06T08:00:00", 16, needs_review=True)
+    d = _blocked(await client.post("/api/payroll/calculation/accrue", headers=H,
+                                   json={"employee_id": lab, "month": "2026-08"}))
+    assert [(f["kind"], f["date"]) for f in d["flagged"]] == [("time_entry", "2026-08-05")]
+    d = _blocked(await client.post("/api/payroll/calculation/accrue", headers=H,
+                                   json={"employee_id": att, "month": "2026-08"}))
+    assert [(f["kind"], f["date"]) for f in d["flagged"]] == [("shift", "2026-08-06")]
+
+
+async def test_run_all_blocks_each_person_only_on_their_paying_clock(client, db):
+    H, org, _ = await _register(client)
+    lab_ok, _ = await _teammate(client, H, await _role(db, org), name="Lena Labour")
+    att_ok, _ = await _teammate(client, H, await _role(db, org), name="Alex Attend")
+    lab_bad, _ = await _teammate(client, H, await _role(db, org), name="Lou Labour")
+    att_bad, _ = await _teammate(client, H, await _role(db, org), name="Ari Attend")
+    for p in (att_ok, att_bad):
+        await _attendance(db, p)
+    await _shift(db, org, lab_ok, "2026-08-04T08:00:00", 16, needs_review=True)     # not their clock
+    await _entry(db, org, att_ok, "2026-08-05T09:00:00", 12, needs_review=True)     # not their clock
+    await _entry(db, org, lab_bad, "2026-08-05T09:00:00", 12, needs_review=True)
+    await _shift(db, org, att_bad, "2026-08-04T08:00:00", 16, needs_review=True)
+    r = await client.post("/api/payroll/run-all", headers=H, json={
+        "period_start": "2026-08-01", "period_end": "2026-08-31",
+        "employee_ids": [lab_ok, att_ok, lab_bad, att_bad]})
+    assert r.status_code == 201, r.text
+    res = {x["employee_id"]: x for x in r.json()["results"]}
+    assert res[lab_ok]["status"] == "accrued" and res[att_ok]["status"] == "accrued", res
+    assert res[lab_bad]["status"] == "skipped" and res[lab_bad]["flagged"][0]["kind"] == "time_entry"
+    assert res[att_bad]["status"] == "skipped" and res[att_bad]["flagged"][0]["kind"] == "shift"
+    assert r.json()["accrued"] == 2 and r.json()["skipped"] == 2
