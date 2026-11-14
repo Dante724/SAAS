@@ -299,13 +299,15 @@ then switches it off: the shop is inactive with `offboarded_at` set, its staff a
 signed out, and its API keys stop working. Offboarding deletes nothing. The docstring shows how to run it.
 
 **Hard purge (owner decision 9).** Once a shop has been offboarded for `SHOP_PURGE_AFTER_DAYS` days
-(default 30, at most 90: a higher value is treated as 90), a platform admin with the owner role can
+(default 30, clamped to 30–90: a lower value counts as 30, a higher one as 90), a platform admin with the owner role can
 delete its data for good from `/admin` → the shop → "Delete this shop's data for good". A dry run lists
 the rows per table and the stored files first; the purge needs the shop's exact name typed and a
-reason, and is written to the action log. It deletes every row the shop owns in every table, and its
-media objects (local or S3; an object another shop's file still uses is kept). The shop's
-`organisations` row stays as a scrubbed tombstone ("Purged shop", contact details and settings
-cleared) because the append-only action log still points at it. If any other shop's row points at
+reason, and is written to the action log. It deletes every row of the shop's own data in every
+table, the admin team's notes on it (`admin_shop_notes`), and its media objects (local or S3; an
+object another shop's file still uses is kept). Tekly's own records about the shop are kept:
+`admin_action_log`, `billing_events`, `admin_assignment_log` and `admin_approval_requests`. They
+still point at the shop's `organisations` row, which stays as a scrubbed tombstone with the same id
+("Purged shop", contact details and settings cleared). If any other shop's row points at
 the shop's data, the purge refuses and deletes nothing. Nothing purges automatically: there is no
 scheduled job. Export the shop first (offboarding does) if it or its accountant needs the records.
 See `backend/services/shop_purge.py`.

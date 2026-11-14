@@ -15,7 +15,7 @@ rows never cascade (DB-12). This is the one supported way to close a shop:
 
 **No hard purge here.** Offboarding keeps the rows, invisible to everyone (no staff can sign in, no
 public link answers). Deleting them for good is a separate, manual step (owner decision 9):
-services/shop_purge, run from /admin by an owner at least SHOP_PURGE_AFTER_DAYS (default 30, max 90)
+services/shop_purge, run from /admin by an owner at least SHOP_PURGE_AFTER_DAYS (default 30, clamped to 30..90)
 after offboarding, never on a schedule.
 
 Run it from a shell with the platform console's database access, e.g.::

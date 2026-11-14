@@ -294,7 +294,7 @@ function PurgeSection({ shopId, purge, offboardedAt, onPurged }: {
       <div>
         <h3 className="text-sm font-semibold text-rose-700">Delete this shop's data for good</h3>
         <p className="mt-1 text-xs text-ink-secondary">
-          Removes every record and stored file of this shop. It can't be undone. Only a blank placeholder for the shop and its action log entries stay.
+          Removes every record and stored file of this shop. It can't be undone. Tekly's billing and admin records about the shop stay, under a blank placeholder.
         </p>
       </div>
       {purge.purged_at ? (

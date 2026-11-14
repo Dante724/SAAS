@@ -6,7 +6,7 @@ a schedule, and a test keeps it that way.
 
 Rules:
 - the shop must be offboarded, at least ``purge_after_days()`` days ago (setting
-  SHOP_PURGE_AFTER_DAYS, default 30, never more than 90 and never less than 1);
+  SHOP_PURGE_AFTER_DAYS, default 30, clamped to 30..90: below 30 counts as 30, above 90 as 90);
 - the admin types the shop's exact name;
 - ``preview`` (the dry run) returns the rows per table and the files it would delete, changing
   nothing; ``purge`` deletes them in one transaction and writes one action-log row.
@@ -18,14 +18,17 @@ self-references, which one DELETE per table handles, and warehouses.default_bin_
 ON DELETE SET NULL and its bins go first). Plus the shop's media objects (local or S3), through
 ``media.erase``, which keeps an object another shop's blob still points at.
 
-What is kept, and why: the platform's ``admin_action_log`` is append-only (a trigger refuses UPDATE
-and DELETE, and each row is hash-chained), and its rows reference ``organisations.id``. Deleting the
-shop's ``organisations`` row would need those rows deleted or their org_id set to NULL, both refused
-by the trigger (and either would break the chain). So the ``organisations`` row stays as a scrubbed
-tombstone: name "Purged shop", every nullable column NULL (contact details, address, logo, domains,
-Stripe ids, notes), every other setting back to its default; only the id, the internal account id,
-created_at, offboarded_at, plan and stage are kept. The purge's own action-log row (action
-``purge_shop``) is the "purged at" marker, so no schema change is needed.
+What is kept, and why (owner, 2026-11-14): the platform's own records about the shop stay, the
+shop's data goes (``admin_shop_notes``, the admin team's notes and calls, go with it).
+``KEPT_TABLES``: ``admin_action_log`` (append-only: a trigger refuses UPDATE and DELETE, and each
+row is hash-chained), ``billing_events`` (Tekly's billing ledger), ``admin_assignment_log`` and
+``admin_approval_requests``. Each references ``organisations.id`` only, so the ``organisations`` row
+stays as a scrubbed tombstone with its id unchanged: name "Purged shop", every nullable column NULL
+(contact details, address, logo, domains, Stripe ids, notes), every other setting back to its
+default; only the id, the internal account id, created_at, offboarded_at, plan and stage are kept.
+The purge's own action-log row (action ``purge_shop``) is the "purged at" marker, so no schema
+change is needed. A kept row never blocks the purge: no kept table points at a deleted one (a test
+checks it), and the dry run never counts them.
 
 Isolation: before deleting anything, every foreign key in the schema that points at a row about to
 be deleted is checked. If a row that is NOT being deleted (another shop's, or a platform row) still
@@ -42,11 +45,17 @@ from sqlalchemy import and_, delete, func, or_, select
 from backend.config import settings
 
 MAX_AFTER_DAYS = 90
-MIN_AFTER_DAYS = 1
+MIN_AFTER_DAYS = 30
 TOMBSTONE_NAME = "Purged shop"
 ACTION = "purge_shop"
-# Tables with an org_id the purge keeps (see the module docstring).
-KEPT_TABLES = {"admin_action_log"}
+# Tables with an org_id the purge keeps (owner, 2026-11-14; see the module docstring). Each references
+# only organisations (and platform admins), so its rows keep pointing at the tombstone's unchanged id.
+KEPT_TABLES = {
+    "admin_action_log": "the platform's append-only admin trail (a trigger refuses UPDATE and DELETE)",
+    "billing_events": "Tekly's own billing ledger for the shop (Stripe Billing webhooks)",
+    "admin_assignment_log": "who looked after the shop, for the admin team's records",
+    "admin_approval_requests": "money actions sent to the owner for approval, for the admin team's records",
+}
 # organisations columns the tombstone keeps; every other column is NULL or back to its default.
 _TOMBSTONE_KEEPS = {"id", "account_id", "created_at", "offboarded_at", "plan", "sub_status"}
 
@@ -58,8 +67,8 @@ class PurgeRefused(Exception):
 
 
 def purge_after_days() -> int:
-    """SHOP_PURGE_AFTER_DAYS bounded to 1..90: a higher value means 90 (the owner's maximum), a
-    lower one 1 (never the same day as offboarding)."""
+    """SHOP_PURGE_AFTER_DAYS bounded to 30..90 (owner): a higher value counts as 90, a lower one
+    as 30."""
     try:
         n = int(settings.SHOP_PURGE_AFTER_DAYS)
     except (TypeError, ValueError):

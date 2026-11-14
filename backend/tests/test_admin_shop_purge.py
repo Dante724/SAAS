@@ -19,8 +19,12 @@ from backend.config import settings
 from backend.db.database import AsyncSessionLocal, Base
 from backend.models import (
     AdminActionLog,
+    AdminApprovalRequest,
+    AdminAssignmentLog,
     AdminRole,
+    AdminShopNote,
     AuthToken,
+    BillingEvent,
     ClientPortalLink,
     Employee,
     MediaBlob,
@@ -34,6 +38,9 @@ from backend.tests.admin_helpers import admin_headers
 
 PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 DATA_URL = f"data:image/png;base64,{PNG}"
+# Kept by the purge (owner, 2026-11-14): the tombstone, the platform's billing ledger and its admin
+# trail. Everything else of the shop goes, admin_shop_notes included.
+KEPT = {"organisations", "admin_action_log", "billing_events", "admin_assignment_log", "admin_approval_requests"}
 
 
 @pytest.fixture(autouse=True)
@@ -188,7 +195,7 @@ def test_the_waiting_period_defaults_to_30_and_never_exceeds_90(monkeypatch):
     from backend.config import Settings
     from backend.services import shop_purge
     assert Settings.model_fields["SHOP_PURGE_AFTER_DAYS"].default == 30
-    for value, want in ((30, 30), (90, 90), (91, 90), (365, 90), (7, 7), (0, 1), (-5, 1)):
+    for value, want in ((30, 30), (31, 31), (90, 90), (91, 90), (120, 90), (365, 90), (29, 30), (5, 30), (0, 30), (-5, 30)):
         monkeypatch.setattr(settings, "SHOP_PURGE_AFTER_DAYS", value)
         assert shop_purge.purge_after_days() == want, value
 
@@ -229,8 +236,8 @@ async def test_the_dry_run_counts_every_table_and_deletes_nothing(client, _local
     assert c["orders"] == 1 and c["clients"] == 1 and c["payments"] == 1 and c["media_blobs"] == 1
     assert c["employees"] == 1 and c["revoked_sessions"] == 1
     assert c["auth_tokens"] == before["auth_tokens"] >= 1      # reached through the shop's staff
-    assert {t: n for t, n in before.items() if n and t not in ("organisations", "admin_action_log")} == c
-    assert "admin_action_log" not in c and "organisations" not in c
+    assert {t: n for t, n in before.items() if n and t not in KEPT} == c
+    assert not (KEPT & set(c))                      # kept tables never show as "to delete"
     assert dry["media_files"] == 1 and dry["total"] == sum(c.values())
     assert all(v > 0 for v in c.values())          # only tables with rows are listed
     assert await _counts(a["org"]) == before and _files(_local_media) == files
@@ -262,7 +269,7 @@ async def test_purge_removes_every_row_and_file_of_the_shop_and_nothing_of_anoth
     assert r.json()["counts"] == dry["counts"] and r.json()["media_files"] == 1
 
     a_after = await _counts(a["org"])
-    leftovers = {t: n for t, n in a_after.items() if n and t not in ("organisations", "admin_action_log")}
+    leftovers = {t: n for t, n in a_after.items() if n and t not in KEPT}
     assert leftovers == {}                          # every org-scoped table: no row of A left
     assert not os.path.exists(os.path.join(_local_media, a_key))
     # The shop next door: every table, row for row, and its file still loads.
@@ -353,3 +360,78 @@ def test_no_scheduled_job_purges_shops():
     users = sorted(str(f.relative_to(root)) for f in list((root / "backend").rglob("*.py")) + [root / "main.py"]
                    if uses.search(f.read_text()) and f.name not in ("shop_purge.py", "test_admin_shop_purge.py"))
     assert users == ["backend/routers/admin.py"]
+
+
+# ── what the purge keeps (owner, 2026-11-14) ───────────────────────────────────────────────────
+async def _platform_rows(s, admin_email):
+    """A billing event, a hand-over and an approval request about this shop."""
+    from backend.models import PlatformAdmin
+    async with AsyncSessionLocal() as db:
+        aid = (await db.execute(select(PlatformAdmin.id).where(PlatformAdmin.email == admin_email))).scalar_one()
+        db.add(BillingEvent(id=f"evt_{uuid.uuid4().hex}", type="invoice.paid", org_id=s["org"]))
+        db.add(AdminAssignmentLog(org_id=s["org"], to_admin_id=aid, by_admin_id=aid, reason="New book"))
+        db.add(AdminApprovalRequest(requester_id=aid, org_id=s["org"], action="discount", payload={"pct": 30},
+                                    reason="Retention", expires_at=datetime.utcnow() + timedelta(days=7)))
+        await db.commit()
+
+
+async def test_billing_hand_overs_and_approvals_are_kept_and_notes_are_deleted(client):
+    a = await _shop(client, "Leaving Co")
+    b = await _shop(client, "Staying Co")
+    H, email = await admin_headers(client)
+    for s in (a, b):
+        await _platform_rows(s, email)
+        assert (await client.post(f"/api/admin/tenants/{s['org']}/notes", json={"body": "Called"},
+                                  headers=H)).status_code == 201
+    await _offboard(a["org"], 31)
+    a_before, b_before = await _counts(a["org"]), await _counts(b["org"])
+    dry = (await client.get(f"/api/admin/tenants/{a['org']}/purge", headers=H)).json()
+    assert dry["eligible"] is True and dry["counts"]["admin_shop_notes"] == 1
+    assert not ({"billing_events", "admin_assignment_log", "admin_approval_requests"} & set(dry["counts"]))
+    assert (await _purge(client, H, a)).status_code == 200
+    a_after = await _counts(a["org"])
+    for t in ("billing_events", "admin_assignment_log", "admin_approval_requests"):
+        assert a_after[t] == a_before[t] == 1, t          # kept, still pointing at the tombstone's id
+    assert a_after["admin_shop_notes"] == 0
+    async with AsyncSessionLocal() as db:
+        assert (await db.get(Organisation, a["org"])).name == "Purged shop"
+        for model in (BillingEvent, AdminAssignmentLog, AdminApprovalRequest):
+            org_ids = (await db.execute(select(model.org_id).where(model.org_id == a["org"]))).scalars().all()
+            assert org_ids == [a["org"]], model
+    assert await _counts(b["org"]) == b_before
+
+
+async def test_a_setting_below_30_counts_as_30(client, monkeypatch):
+    monkeypatch.setattr(settings, "SHOP_PURGE_AFTER_DAYS", 5)
+    H, _ = await admin_headers(client)
+    early, ready = await _shop(client, "Early Co"), await _shop(client, "Ready Co")
+    await _offboard(early["org"], 29)
+    await _offboard(ready["org"], 31)
+    dry = (await client.get(f"/api/admin/tenants/{early['org']}/purge", headers=H)).json()
+    assert dry["after_days"] == 30 and dry["eligible"] is False
+    assert (await _purge(client, H, early)).status_code == 409
+    assert (await _counts(early["org"]))["orders"] == 1
+    assert (await _purge(client, H, ready)).status_code == 200
+
+
+async def test_a_setting_of_120_counts_as_90(client, monkeypatch):
+    monkeypatch.setattr(settings, "SHOP_PURGE_AFTER_DAYS", 120)
+    H, _ = await admin_headers(client)
+    early, ready = await _shop(client, "Early Co"), await _shop(client, "Ready Co")
+    await _offboard(early["org"], 89)
+    await _offboard(ready["org"], 91)
+    assert (await client.get(f"/api/admin/tenants/{early['org']}/purge", headers=H)).json()["after_days"] == 90
+    assert (await _purge(client, H, early)).status_code == 409
+    assert (await _purge(client, H, ready)).status_code == 200
+
+
+def test_no_kept_table_points_at_a_table_the_purge_deletes():
+    """Kept rows can never block the purge (or be cascaded into): they reference organisations and
+    platform tables only."""
+    from backend.services import shop_purge
+    assert set(shop_purge.KEPT_TABLES) == KEPT - {"organisations"}
+    doomed = {t.name for t, _ in shop_purge.targets("x")}
+    assert not (doomed & set(shop_purge.KEPT_TABLES)) and "admin_shop_notes" in doomed
+    for t in Base.metadata.sorted_tables:
+        if t.name in shop_purge.KEPT_TABLES:
+            assert {fk.column.table.name for fk in t.foreign_keys} <= {"organisations", "platform_admins"}, t.name
