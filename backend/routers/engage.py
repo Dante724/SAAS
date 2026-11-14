@@ -297,6 +297,11 @@ async def recap_redemptions(db, org_id: str, order: Order, actor_id: Optional[st
         return False
     gross = (sum((dec(ln.total) for ln in lines if not redemption_kind(ln)), Decimal("0"))
              - dec(getattr(order, "written_off", 0) or 0) - dec(await credited(db, order.id)))
+    # BE-4: the job bills its ROUNDED total, so the cap includes the rounding difference too (it
+    # used to hand that 0.0x back to the card on every line edit, leaving the job owing it).
+    from backend.routers.orders import rounded_total
+    every = sum((dec(ln.total) for ln in lines), Decimal("0"))
+    gross += dec(await rounded_total(db, org_id, every)) - every
     own = dec(await net_paid(db, order.id)) - gc
     excess = d2(held - max(gross - own, Decimal("0")))
     if excess <= Decimal("0.005"):

@@ -598,8 +598,8 @@ async def list_orders(
     q: Optional[str] = None,                  # alias of search (global search box sends q=)
     type_id: Optional[str] = None,
     assigned_to_id: Optional[str] = None,     # "__none" = unassigned
-    priority: Optional[int] = None,
-    priority_min: Optional[int] = None,       # 1 = urgent or VIP
+    priority: Optional[int] = Query(None, ge=0, le=9),   # X4: a real range, not any 64-bit int
+    priority_min: Optional[int] = Query(None, ge=0, le=9),   # 1 = urgent or VIP
     scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
     client_id: Optional[str] = None,
     brand: Optional[str] = None,
@@ -1312,7 +1312,8 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         is_estimate=data.is_estimate,
         labour_total=labour_total,
         parts_total=parts_total,
-        total=labour_total + parts_total,
+        # BE-4: rounded from birth, as every recalculation does (it was 99.98, then 100.00)
+        total=await rounded_total(db, current.org_id, labour_total + parts_total),
         tax=order_tax(lines),
         currency_code=_cinfo["code"],
         fx_rate=_cinfo["rate"],
@@ -1382,7 +1383,7 @@ async def board(
     location_id: Optional[str] = None,        # build 138: scope the board to a branch
     search: Optional[str] = None,
     assigned_to_id: Optional[str] = None,     # "__none" = unassigned
-    priority_min: Optional[int] = None,
+    priority_min: Optional[int] = Query(None, ge=0, le=9),
     scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
     per_column: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
@@ -4721,6 +4722,17 @@ async def _stop_job_timers(db, order, bill: bool = True) -> None:
                                f"{len(running)} running timer{'s' if len(running) != 1 else ''} stopped (job closed)")
 
 
+ROUNDING_STEP = 0.05
+
+
+async def rounded_total(db, org_id: str, total):
+    """Item 3: optional whole-document rounding (nearest ROUNDING_STEP). Off by default. The one
+    rule for a job's total: creation, every recalculation and the gift-card cap (BE-4) use it."""
+    on = (await db.execute(select(Organisation.rounding_enabled).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    return round_to_step(total, ROUNDING_STEP) if on else total
+
+
 async def _recalc_order(db, order):
     """Recompute an order's labour/parts/total from its lines, and its unsent invoices with it."""
     prev_total = float(order.total or 0)
@@ -4735,10 +4747,7 @@ async def _recalc_order(db, order):
         # Discounts left behind after the work they paid for was removed: the job is worth 0, and
         # labour + parts still add up to it (discount lines sit in labour_total).
         order.labour_total = msum([labour, fees, -total])
-    # Item 3: optional whole-document rounding (nearest 0.05). Off by default.
-    _org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
-    if _org and getattr(_org, "rounding_enabled", False):
-        total = round_to_step(total, 0.05)
+    total = await rounded_total(db, order.org_id, total)
     # Never below zero: discount lines (gift card, coupon, loyalty) left behind after the lines
     # they paid for were removed made the total negative, which then read as an "overpayment" and
     # could be refunded in cash (audit 2026-10-29, H5).

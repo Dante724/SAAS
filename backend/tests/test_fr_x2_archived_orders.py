@@ -90,3 +90,11 @@ async def test_archived_list_has_a_real_total_and_pages(client, tenant, db):
     p3 = (await client.get("/api/orders/archived?limit=2&skip=4", headers=tenant)).json()
     assert p3["total"] == 5 and [x["id"] for x in p3["items"]] == ids[4:]
     assert p3["skip"] == 4 and p3["limit"] == 2
+
+
+@pytest.mark.parametrize("url", ["/api/orders?priority=99999999999999999999", "/api/orders?priority_min=-1",
+                                 "/api/orders/board?priority_min=10"])
+async def test_priority_filters_have_a_range(client, tenant, url):
+    """X4 follow-up: an out-of-range priority is a 422, not a database overflow."""
+    assert (await client.get(url, headers=tenant)).status_code == 422
+    assert (await client.get("/api/orders?priority=1&priority_min=1", headers=tenant)).status_code == 200
