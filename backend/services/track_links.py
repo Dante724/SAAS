@@ -8,10 +8,15 @@ pay a deposit. Before SEC-12 the token sat in clear in ``orders.public_token`` a
   :class:`TokenComparator`). Documents, texts and the staff screen still print the link, so the
   token is also kept encrypted (``orders.public_token_enc``, :mod:`backend.services.crypto`,
   TOKEN_ENCRYPTION_KEY, which production requires). A database dump alone opens no link.
-- **Expiry:** a link stops working ``TRACK_LINK_DAYS`` (180) days after the job closed, or after
-  it was last re-issued (rotate), whichever is later. A job that is open again (``closed_at``
-  cleared) has a working link. There is no per-shop setting yet: none of the existing ones fits
-  (``retention_days`` means "keep for good" when unset), so this is a constant for now.
+- **Expiry (owner decision 8):** a link stops working ``settings.TRACK_LINK_DAYS`` (90) days
+  after the job closed, or after it was last re-issued (rotate), whichever is later. One platform
+  default, no per-shop setting. An open job never expires, however old. A reopened job is open
+  again: reopening by a status change keeps ``closed_at`` (orders.update_status only writes it on
+  a close), so :func:`link_expired` also checks the job still sits in a closed status, the same
+  test as orders._is_closed. Closing it again restarts the clock (``closed_at`` = now).
+  An expired link answers :class:`TrackLinkExpired` (410 Gone, ``expired: true`` and the shop's
+  public contact, never job data) on every route keyed by the token: the page, its actions, its
+  PDFs and its photos (they all load the job through routers/public._load).
 - **Rotate / revoke** keep working: setting ``order.public_token`` to a new token or to None
   replaces the hash and the ciphertext, and always clears the legacy plaintext column.
 - **Legacy column:** migration dbi02 hashed and encrypted every existing token and keeps the old
@@ -25,10 +30,17 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, or_
+from fastapi import HTTPException
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.hybrid import Comparator
 
-TRACK_LINK_DAYS = 180
+EXPIRED_MESSAGE = "This link has expired. Please contact the shop if you need anything about this repair."
+
+
+def link_days() -> int:
+    """The platform window (days after the close) a tracking link keeps working."""
+    from backend.config import settings
+    return int(settings.TRACK_LINK_DAYS)
 
 
 def hash_token(token: str) -> str:
@@ -94,10 +106,51 @@ def expires_at(order) -> datetime | None:
         return None
     issued = getattr(order, "public_token_issued_at", None)
     start = max(closed, issued) if issued else closed
-    return start + timedelta(days=TRACK_LINK_DAYS)
+    return start + timedelta(days=link_days())
 
 
 def is_expired(order, now: datetime | None = None) -> bool:
+    """Past the window by the dates alone. :func:`link_expired` also checks the job is closed."""
     from backend.services.dates import now_utc
     end = expires_at(order)
     return end is not None and (now or now_utc()) >= end
+
+
+async def _sits_closed(db, order) -> bool:
+    """Is the job in a closed (terminal) status right now? Mirrors orders._is_closed: a job moved
+    back to an open status keeps its old closed_at but is open."""
+    from backend.models import OrderStatus
+    st = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status,
+        OrderStatus.is_estimate == bool(order.is_estimate)))).scalars().first()
+    if st:
+        return st.status_group == "closed" or bool(st.is_terminal)
+    return bool(order.closed_at)
+
+
+async def link_expired(db, order, now: datetime | None = None) -> bool:
+    """Has this job's tracking link stopped working? Only reads the status when the dates say so."""
+    return is_expired(order, now) and await _sits_closed(db, order)
+
+
+class TrackLinkExpired(HTTPException):
+    """410 Gone for an expired tracking link. main.py renders it as
+    ``{"detail", "expired": true, "shop": {name, phone, email}}``, which the track page shows as
+    its polite "this link has expired, contact the shop" state."""
+
+    def __init__(self, shop: dict):
+        super().__init__(410, EXPIRED_MESSAGE, headers={"Cache-Control": "no-store"})
+        self.shop = shop
+
+
+async def shop_contact(db, order) -> dict:
+    """The shop's public contact for the expired page: the same name and phone the track page
+    shows (the job's location phone, else the shop's) and the shop's public email (printed on its
+    documents). Nothing about the job itself."""
+    from backend.models import Location, Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
+    loc = (await db.execute(select(Location).where(Location.id == order.location_id))).scalar_one_or_none() \
+        if order.location_id else None
+    phone = (loc.phone if (loc and getattr(loc, "phone", None)) else getattr(org, "company_phone", None))
+    return {"name": org.name if org else "Repair shop", "phone": phone or None,
+            "email": (getattr(org, "company_email", None) or None) if org else None}

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Check, X, Paperclip, Receipt, Download, MapPin, Clock, Phone, Star, ThumbsUp, ThumbsDown, ExternalLink,
+  Check, X, Paperclip, Receipt, Download, MapPin, Clock, Phone, Star, ThumbsUp, ThumbsDown, ExternalLink, Mail, Hourglass,
 } from "lucide-react";
 import { safeFileHref, safeHttpHref } from "../lib/safeFileHref";
 import { buttonClass, IconButton } from "../components/Button";
@@ -127,10 +127,14 @@ export function scheduleLines(from?: string | null, to?: string | null): { label
 // 144ct — sender label for the two-way message items in the updates feed
 const UPD_SENDER: Record<string, string> = { shop_message: "Shop", client_message: "You" };
 
+// Owner decision 8: 90 days after the job closed its link answers 410 with the shop's contact only.
+export type ExpiredLink = { shop: { name?: string | null; phone?: string | null; email?: string | null } };
+
 // Load one public document and keep it fresh: poll every 20s, pause while the tab is hidden.
 export function usePublicDoc(url: string) {
   const [d, setD] = useState<Track | null>(null);
   const [err, setErr] = useState(false);
+  const [expired, setExpired] = useState<ExpiredLink | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number>(0);
   const urlRef = useRef(url);
   urlRef.current = url;
@@ -139,15 +143,20 @@ export function usePublicDoc(url: string) {
     const at = urlRef.current;
     try {
       const r = await fetch(at);
+      if (r.status === 410) {
+        const body = await r.json().catch(() => null);
+        if (body?.expired && urlRef.current === at) { setExpired({ shop: body.shop || {} }); setD(null); return; }
+      }
       if (!r.ok) throw new Error();
       const data: Track = await r.json();
       if (urlRef.current !== at) return;   // the visitor moved on to another job meanwhile
       setD(data);
       setErr(false);
+      setExpired(null);
       setUpdatedAt(Date.now());
     } catch { if (!silent && urlRef.current === at) setErr(true); }
   }
-  useEffect(() => { setD(null); setErr(false); load(); }, [url]);
+  useEffect(() => { setD(null); setErr(false); setExpired(null); load(); }, [url]);
   useEffect(() => {
     let id: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!id) id = setInterval(() => load(true), 20000); };
@@ -157,14 +166,15 @@ export function usePublicDoc(url: string) {
     document.addEventListener("visibilitychange", onVis);
     return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
   }, []);
-  return { d, err, updatedAt, load };
+  return { d, err, expired, updatedAt, load };
 }
 
 export default function PublicTrack() {
   const token = location.pathname.split("/track/")[1]?.replace(/\/$/, "") || "";
   const api = "/api/public/track/" + token;
-  const { d, err, updatedAt, load } = usePublicDoc(api);
+  const { d, err, expired, updatedAt, load } = usePublicDoc(api);
 
+  if (expired) return <ExpiredTrack shop={expired.shop} />;
   if (err)
     return (
       <PublicLayout title="Track your repair">
@@ -176,6 +186,25 @@ export default function PublicTrack() {
     );
   if (!d) return <PublicLayout shop={null}><span className="sr-only" role="status">Loading…</span></PublicLayout>;
   return <TrackView d={d} updatedAt={updatedAt} api={api} extrasApi={api} reload={load} />;
+}
+
+// The link ran out (90 days after the job closed): say so kindly and give the shop's contact.
+function ExpiredTrack({ shop }: { shop: ExpiredLink["shop"] }) {
+  const contact = (shop.phone || shop.email) && (
+    <div className="flex flex-wrap justify-center gap-2">
+      {shop.phone && <a href={`tel:${shop.phone}`} className={buttonClass("primary", "lg")}><Phone size={15} /> {shop.phone}</a>}
+      {shop.email && <a href={`mailto:${shop.email}`} className={buttonClass("secondary", "lg")}><Mail size={15} /> {shop.email}</a>}
+    </div>
+  );
+  return (
+    <PublicLayout shop={{ name: shop.name || "Repair shop" }}>
+      <div className={publicCard}>
+        <EmptyState size="page" icon={<Hourglass size={20} />} title="This link has expired"
+          body="Tracking links stop working some time after a repair is finished. If you need anything about this repair, please contact the shop."
+          action={contact || undefined} />
+      </div>
+    </PublicLayout>
+  );
 }
 
 // One job as the customer sees it: status, recommendations, estimate, updates, invoice,

@@ -185,6 +185,17 @@ async def _unreadable_creds(_request, exc: CredentialsUnreadable):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
+from backend.services.track_links import TrackLinkExpired  # noqa: E402
+
+
+@app.exception_handler(TrackLinkExpired)
+async def _track_link_expired(_request, exc: TrackLinkExpired):
+    # Owner decision 8: an expired tracking link (any route keyed by it) gets one recognisable
+    # answer the track page renders as "this link has expired, contact the shop".
+    return JSONResponse(status_code=410, headers=exc.headers,
+                        content={"detail": exc.detail, "expired": True, "shop": exc.shop})
+
+
 from backend.services.media import MediaStoreUnavailable, MediaTooLarge  # noqa: E402
 
 

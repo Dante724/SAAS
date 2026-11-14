@@ -121,3 +121,38 @@ describe("PublicTrack estimate extras", () => {
     expect((await screen.findAllByText(/Pay deposit/)).length).toBeGreaterThan(0);
   });
 });
+
+// Owner decision 8 — 90 days after the job closed the link answers 410 with the shop's contact.
+describe("PublicTrack expired link", () => {
+  const gone = (body: unknown) => ({ ok: false, status: 410, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
+
+  it("shows a polite expired page with the shop's contact, never 'not found'", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => gone({
+      detail: "This link has expired.", expired: true,
+      shop: { name: "Fix Co", phone: "+1 555 0100", email: "hello@fixco.test" },
+    })));
+    window.history.pushState({}, "", "/track/old-tok");
+    render(<PublicTrack />);
+    expect(await screen.findByText("This link has expired")).toBeInTheDocument();
+    expect(screen.getByText(/contact the shop/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Fix Co").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: /\+1 555 0100/ })).toHaveAttribute("href", "tel:+1 555 0100");
+    expect(screen.getByRole("link", { name: /hello@fixco\.test/ })).toHaveAttribute("href", "mailto:hello@fixco.test");
+    expect(screen.queryByText("Order not found")).toBeNull();
+  });
+
+  it("still reads well when the shop has no phone or email", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => gone({ detail: "x", expired: true, shop: { name: "Fix Co", phone: null, email: null } })));
+    window.history.pushState({}, "", "/track/old-tok");
+    render(<PublicTrack />);
+    expect(await screen.findByText("This link has expired")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^tel:/ })).toBeNull();
+  });
+
+  it("keeps 'not found' for a link that never existed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404, headers: new Headers(), json: async () => ({ detail: "Order not found" }) }) as Response));
+    window.history.pushState({}, "", "/track/bad");
+    render(<PublicTrack />);
+    expect(await screen.findByText("Order not found")).toBeInTheDocument();
+  });
+});

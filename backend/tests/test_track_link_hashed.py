@@ -63,24 +63,27 @@ async def test_rotate_and_revoke_still_work(client, tenant, db):
     assert (await _row(db, o["id"]))[:3] == (None, None, None)
 
 
-async def test_the_link_expires_180_days_after_the_job_closes(client, tenant, db):
+async def test_the_link_expires_after_the_window_and_rotate_reissues_it(client, tenant, db):
+    """The window is settings.TRACK_LINK_DAYS (owner decision 8, 90 days; test_d8_track_link_expiry
+    has the full rule). Here: it counts from the later of the close and the last re-issue."""
     o = await _order(client, tenant)
     tok = (await client.get(f"/api/orders/{o['id']}", headers=tenant)).json()["public_token"]
-    closed = now_utc() - timedelta(days=track_links.TRACK_LINK_DAYS - 1)
+    sts = (await client.get("/api/statuses", headers=tenant)).json()
+    closed_key = next(s["key"] for s in (sts.get("items", sts) if isinstance(sts, dict) else sts)
+                      if s.get("status_group") == "closed")
+    assert (await client.patch(f"/api/orders/{o['id']}/status", json={"status": closed_key},
+                               headers=tenant)).status_code == 200
+    closed = now_utc() - timedelta(days=track_links.link_days() - 1)
     await db.execute(update(Order).where(Order.id == o["id"]).values(closed_at=closed, public_token_issued_at=None))
     await db.commit()
-    assert (await client.get(f"/api/public/track/{tok}")).status_code == 200      # day 179: still fine
+    assert (await client.get(f"/api/public/track/{tok}")).status_code == 200      # the day before: still fine
     await db.execute(update(Order).where(Order.id == o["id"]).values(closed_at=closed - timedelta(days=2)))
     await db.commit()
     r = await client.get(f"/api/public/track/{tok}")
-    assert r.status_code == 404 and "expired" in r.json()["detail"]
-    assert (await client.get(f"/api/media/track/{tok}/feed/x")).status_code == 404
-    # rotating re-issues it for another 180 days
+    assert r.status_code == 410 and r.json()["expired"] is True and "expired" in r.json()["detail"]
+    assert (await client.get(f"/api/media/track/{tok}/feed/x")).status_code == 410
+    # rotating re-issues it for another window
     new = (await client.post(f"/api/orders/{o['id']}/public-link/rotate", headers=tenant)).json()["token"]
-    assert (await client.get(f"/api/public/track/{new}")).status_code == 200
-    # reopening the job (closed_at cleared) keeps the link alive however old the close was
-    await db.execute(update(Order).where(Order.id == o["id"]).values(closed_at=None, public_token_issued_at=None))
-    await db.commit()
     assert (await client.get(f"/api/public/track/{new}")).status_code == 200
 
 
