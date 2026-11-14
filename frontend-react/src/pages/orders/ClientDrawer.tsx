@@ -337,7 +337,8 @@ function LoyaltyTab({ clientId }: { clientId: string }) {
   // Same gates the server uses: credit = client payments, coupons = discounts, gift cards = finance.
   const canCredit = can("can_make_client_payments");
   const canCoupon = can("can_set_discount");
-  const canGift = can("can_view_finance");
+  // BE-8: this issues a promotional card (no money behind it), an owner-level act on the server
+  const canGift = can("can_view_finance") && can("can_manage_settings");
   const [loy, setLoy] = useState<any>(null);
   const [coupons, setCoupons] = useState<any[] | null>(null);
   const [bal, setBal] = useState<any>(null);

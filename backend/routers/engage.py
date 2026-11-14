@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
@@ -30,7 +30,7 @@ from backend.models import (
     Organisation,
     Payment,
 )
-from backend.services.auth import get_current_employee, record_scope, require_perm
+from backend.services.auth import assert_perm, get_current_employee, record_scope, require_perm
 from backend.services.dates import now_utc
 from backend.services.money import (
     Points,  # NUMERIC input bounds (N3)
@@ -333,13 +333,19 @@ async def recap_redemptions(db, org_id: str, order: Order, actor_id: Optional[st
 
 
 # ── Gift cards ───────────────────────────────────────────────────────────────
+# BE-8: the most one card may carry. A card is spendable money on any job, so a typo (or worse)
+# can't mint an unbounded amount.
+GIFT_CARD_MAX = 10_000
+
+
 class GiftCardIn(BaseModel):
     value: float
     client_id: str                       # gift cards are always linked to a client
     expires_at: Optional[datetime] = None   # optional validity date; null = never expires
     # code is always server-generated & unique — not accepted from the caller.
     # Audit FIN-09: a card sold for money takes that money into a cashbox here. Without an account
-    # the card is a gift from the shop (a promotion), as before: no money moves.
+    # the card is a gift from the shop (a promotion): no money moves, so BE-8 makes it an
+    # owner-level act (can_manage_settings, like coupons) and audits it.
     account_id: Optional[str] = None
 
 
@@ -352,11 +358,25 @@ def _gc(g: GiftCard) -> dict:
 @router.post("/giftcards", status_code=201)
 async def issue_giftcard(
     data: GiftCardIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    if data.value <= 0:
-        raise HTTPException(422, "Gift card value must be positive")
+    """Sell a gift card into a cashbox (account_id) or issue a promotional one (no account).
+
+    BE-8: selling takes a customer's money, so it needs can_take_payments; a promotional card has
+    no money behind it, so it needs can_manage_settings and is audited. Value is capped at
+    GIFT_CARD_MAX. BE-6: a retry with the same Idempotency-Key gets the first card back instead of
+    a second card and a second till leg."""
+    if not (0 < data.value <= GIFT_CARD_MAX):      # also refuses NaN
+        raise HTTPException(422, f"Gift card value must be more than 0 and at most {GIFT_CARD_MAX:,}")
+    await assert_perm(db, current, "can_take_payments" if data.account_id else "can_manage_settings")
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "giftcards.issue", data,
+                          lambda: _issue_giftcard(data, db, current))
+
+
+async def _issue_giftcard(data: GiftCardIn, db: AsyncSession, current: Employee) -> dict:
     # Gift card must belong to a real client in this org.
     client = (await db.execute(select(Client).where(
         Client.id == data.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
@@ -387,9 +407,14 @@ async def issue_giftcard(
         await post_transaction(db, current.org_id, data.account_id, "income", q2(data.value),
                                comment=f"Gift card {code} sold", ref_type="gift_card", ref_id=g.id,
                                employee_id=current.id)
+    else:
+        from backend.services.audit import record as audit_record
+        await audit_record(db, org_id=current.org_id, actor_id=current.id, action="giftcard.promo_issue",
+                           entity_type="gift_card", entity_id=g.id,
+                           diff={"value": float(d2(data.value)), "code": code, "client_id": data.client_id})
     await db.commit()
     await db.refresh(g)
-    return _gc(g)
+    return {**_gc(g), "promotional": not data.account_id}
 
 
 @router.get("/giftcards")
@@ -510,9 +535,19 @@ async def return_all_gift_cards(db, org_id: str, order: Order, actor_id: Optiona
 async def redeem_giftcard(
     order_id: str,
     data: RedeemGiftIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
+    """Spend a gift card on a job. BE-6: a retry with the same Idempotency-Key gets the first
+    answer back instead of redeeming again."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "giftcards.redeem",
+                          {"order_id": order_id, "body": data},
+                          lambda: _redeem_giftcard(order_id, data, db, current))
+
+
+async def _redeem_giftcard(order_id: str, data: RedeemGiftIn, db: AsyncSession, current: Employee) -> dict:
     order = await _editable_order(db, current, order_id)
     from backend.services.order_money import refuse_archived
     refuse_archived(order)
@@ -568,11 +603,20 @@ class GiftRefundIn(BaseModel):
 async def refund_giftcard(
     order_id: str,
     data: GiftRefundIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
     """FIN-09: give gift-card money paid on a job back to the card (the undo of redeem-giftcard).
-    Never more than this job took from that card; the job owes that much again."""
+    Never more than this job took from that card; the job owes that much again. BE-6: a retry
+    with the same Idempotency-Key gets the first answer back."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "giftcards.give_back",
+                          {"order_id": order_id, "body": data},
+                          lambda: _refund_giftcard(order_id, data, db, current))
+
+
+async def _refund_giftcard(order_id: str, data: GiftRefundIn, db: AsyncSession, current: Employee) -> dict:
     order = await _editable_order(db, current, order_id)
     from backend.services.invoice_money import lock_order
     await lock_order(db, order.id)
