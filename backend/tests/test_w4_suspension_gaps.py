@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from backend.config import settings
 from backend.models import Call, ChatMessage, Client, Lead, Organisation
 from backend.services.org_live import PUBLIC_OFF_MESSAGE
+from backend.tests.lapse_modes import OFF_MODES, off_mode, set_off_status
 from backend.tests.test_opd_telephony import (  # noqa: F401 — fake_twilio is a fixture
     connect,
     fake_twilio,
@@ -27,10 +28,16 @@ from backend.tests.test_public_pay_page import _payment_link, _register
 pytestmark = pytest.mark.asyncio
 
 
+# Owner decision 7: a shop past its lapse grace (sub_end + SUB_LAPSE_GRACE_DAYS) is held exactly like
+# a suspended one, so every case here runs both ways (backend/tests/lapse_modes.py).
+@pytest.fixture(autouse=True, params=OFF_MODES)
+def _off_mode(request):
+    with off_mode(request.param):
+        yield request.param
+
+
 async def _set_status(db, org_id, status):
-    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
-    org.sub_status = status
-    await db.commit()
+    await set_off_status(db, org_id, status)
 
 
 async def _count(db, model, *where):

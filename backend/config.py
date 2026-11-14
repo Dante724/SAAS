@@ -192,6 +192,10 @@ class Settings(BaseSettings):
     SUPPORT_EMAIL: str = "hello@tekly.app"
     SUPPORT_URL: str = ""              # help centre / contact page; empty = mailto SUPPORT_EMAIL
 
+    # Owner decision 7: days of normal service after a shop's term end (sub_end) before it is held
+    # like a suspended shop (services/org_live). The owner sees a "renew" banner meanwhile.
+    SUB_LAPSE_GRACE_DAYS: int = 7
+
     HOME_DASHBOARD_CACHE_S: int = 30   # PERF-07: Home's shop-wide figures, per shop + branch (0 = off)
 
     # ── B3: media storage ─────────────────────────────────────────────────

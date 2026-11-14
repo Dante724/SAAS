@@ -15,6 +15,8 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
+from backend.tests.lapse_modes import OFF_MODES, off_mode, set_off_status
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -160,14 +162,19 @@ async def test_ntf01_committing_callers_still_save_the_bell_and_touch_the_device
 
 
 # ── CLI-01 ───────────────────────────────────────────────────────────────────────────────────────
+# Owner decision 7: a shop past its lapse grace is held exactly like a suspended one, so the CLI-01
+# cases run both ways (backend/tests/lapse_modes.py).
+@pytest.fixture(params=OFF_MODES)
+def off(request):
+    with off_mode(request.param):
+        yield request.param
+
+
 async def _set_status(db, org_id, status):
-    from backend.models import Organisation
-    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
-    org.sub_status = status
-    await db.commit()
+    await set_off_status(db, org_id, status)
 
 
-async def test_cli01_suspended_shop_outbox_waits_and_unsuspend_delivers(client, tenant, db):
+async def test_cli01_suspended_shop_outbox_waits_and_unsuspend_delivers(client, tenant, db, off):
     from backend.models import NotificationLog
     from backend.services import notification_rules as nr
     from backend.services.dates import now_utc
@@ -190,7 +197,7 @@ async def test_cli01_suspended_shop_outbox_waits_and_unsuspend_delivers(client, 
     assert (await nr.run_due(db, org_id=org_id))["sent"] == 1
 
 
-async def test_cli01_suspended_shop_webhooks_wait(client, tenant, db, monkeypatch):
+async def test_cli01_suspended_shop_webhooks_wait(client, tenant, db, monkeypatch, off):
     from backend.models import WebhookDelivery, WebhookEndpoint
     from backend.services import webhooks as wh
     org_id = (await _me(client, tenant))["org_id"]
@@ -221,7 +228,7 @@ async def test_cli01_suspended_shop_webhooks_wait(client, tenant, db, monkeypatc
     assert tried == [d.id] and d.status == "sent"
 
 
-async def test_cli01_sweeps_skip_a_suspended_shop(client, tenant, db):
+async def test_cli01_sweeps_skip_a_suspended_shop(client, tenant, db, off):
     """Every sweep picks shops through services.org_live.live_org_clause."""
     from backend.core import scheduled
     from backend.models import Organisation
@@ -244,7 +251,7 @@ async def test_cli01_sweeps_skip_a_suspended_shop(client, tenant, db):
     assert await org_id_is_live(db, org_id) is True
 
 
-async def test_cli01_public_pages_close_intake_but_tracking_stays_readable(client, tenant, db):
+async def test_cli01_public_pages_close_intake_but_tracking_stays_readable(client, tenant, db, off):
     org_id = (await _me(client, tenant))["org_id"]
     _cid, order_id = await _job(client, tenant)
     token = (await client.get(f"/api/orders/{order_id}", headers=tenant)).json()["public_token"]

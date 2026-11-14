@@ -8,7 +8,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
 import { t, getLang, setLang, applyDir } from "../i18n";
-import { useMe, NAV_PERM, NAV_FEATURE, hasFeature, type Billing } from "../context/Me";
+import { useMe, NAV_PERM, NAV_FEATURE, hasFeature, type Billing, type Me } from "../context/Me";
 import {
   Wrench, Mail, MessageSquare, MessageCircle, Calendar, CalendarRange, Users, User,
   UserPlus, ShoppingCart, Package, Boxes, Landmark, Wallet, BarChart3, Settings as SettingsIcon,
@@ -176,8 +176,23 @@ export function planBadge(b?: Billing | null): string | null {
   return PLAN_LABEL[b.plan] || "Solo";
 }
 
-function BillingBanner({ billing }: { billing?: Billing | null }) {
-  const n = billingNotice(billing);
+const fmtDay = (iso?: string | null) => {
+  if (!iso) return "";
+  const d = new Date(`${iso}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+};
+
+// Owner decision 7: the shop's term has ended and it is in its week of grace. Only the owner is
+// asked to renew; staff keep working without the notice.
+export function lapseNotice(me?: Me | null): { tone: "warn"; text: string; cta: string } | null {
+  const s = me?.subscription;
+  if (!s?.lapsed || !(me?.is_owner || me?.is_shop_owner)) return null;
+  const by = s.grace_ends_at ? ` Renew by ${fmtDay(s.grace_ends_at)} to keep your shop running.` : "";
+  return { tone: "warn", text: `Your Tekly subscription ended on ${fmtDay(s.sub_end)}.${by}`, cta: "Renew now" };
+}
+
+export function BillingBanner({ me }: { me?: Me | null }) {
+  const n = lapseNotice(me) || billingNotice(me?.billing);
   if (!n) return null;
   const cls = { bad: "bg-rose-50 border-rose-200 text-rose-800 hover:bg-rose-100", warn: "bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100",
     info: "bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100" }[n.tone];
@@ -401,7 +416,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}
-          <BillingBanner billing={me?.billing} />
+          <BillingBanner me={me} />
           {children}
         </main>
       </div>
