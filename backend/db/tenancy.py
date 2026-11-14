@@ -36,10 +36,10 @@ every ORM bulk ``update(Model)`` / ``delete(Model)``, gets ``WHERE <model>.org_i
 each OrgScoped entity in it (joins and aliases included). So ``db.get(Part, other_shops_id)`` is
 None, ``update(Client).where(Client.id == other_shops_id)`` changes 0 rows, and a query that
 forgets its ``org_id`` filter returns only this shop's rows. The hand-written filters stay: this
-is the safety net under them, not a replacement. A row whose org_id is NULL (devices and POs
-still allow it, from an old backfill: migration trg01 fills what it can) is visible to no shop,
-so a new device or PO saved without one takes its shop from its links before flush, like
-every child row (``ORG_PARENTS``).
+is the safety net under them, not a replacement. Every OrgScoped table's org_id is NOT NULL
+(devices and purchase orders too, since dbi01, DB-14), so no shop's row is hidden from it this way;
+a new row saved without one, devices and POs included, takes its shop from its links before flush
+(``ORG_PARENTS``).
 
 - Not filtered: sessions with no tenant; refreshes of rows already loaded; and statements that
   opt out with ``.execution_options(skip_tenant_filter=True)``. Each such call site says why
@@ -223,9 +223,10 @@ def _soft_targets(obj, attr: str = "ref_id") -> tuple:
 # this order (audit 2026-11-12 DB-01/DB-02). The child tables (payments, lines, shifts, stock
 # levels and movements, …) carry their own org_id, NOT NULL, so every one of them is OrgScoped;
 # nothing in the routers has to set it, this fills it centrally before every flush. Migration corg01
-# backfilled existing rows from the same links. Devices and POs keep their nullable org_id from an
-# old backfill (trg01). A row none of whose links name a shop takes the request's shop; with no
-# request shop either, the NOT NULL column refuses it (a payment linked to nothing belongs to no one).
+# backfilled existing rows from the same links; dbi01 did the same for devices and POs and made
+# their org_id NOT NULL as well (DB-14). A row none of whose links name a shop takes the request's
+# shop; with no request shop either, the NOT NULL column refuses it (a payment linked to nothing
+# belongs to no one).
 ORG_PARENTS: dict[str, tuple[str, ...]] = {
     "devices": ("client_id", "location_id", "warehouse_id"),
     "purchase_orders": ("location_id", "supplier_id"),

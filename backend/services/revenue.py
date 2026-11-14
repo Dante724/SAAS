@@ -510,8 +510,9 @@ def shop_payments(org_id: str, location_id: Optional[str] = None):
 
 
 def money_in_payment():
-    """SQL condition: a payment that brought new money in (paying from a client's balance doesn't)."""
-    return func.coalesce(Payment.method, "") != "balance"
+    """SQL condition: a payment that brought new money in. Paying from a client's balance doesn't,
+    nor does a gift card (FIN-09: its money came in when the card was sold)."""
+    return func.coalesce(Payment.method, "").notin_(("balance", "gift_card"))
 
 
 async def cash_collected(db: AsyncSession, org_id: str, df: Optional[datetime] = None,

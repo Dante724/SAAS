@@ -543,6 +543,21 @@ async def reverse_charge(db: AsyncSession, order: Order, charge_ref: str | None,
     return out
 
 
+async def _refuse_gift_card_money_as_cash(db: AsyncSession, order: Order, amount: float) -> None:
+    """FIN-09: what gift cards paid on a job goes back to the card (engage.return_to_gift_card),
+    never out of a cashbox: a cash refund is capped at the money the customer paid themselves."""
+    from backend.routers.engage import gift_card_paid
+    from backend.services.order_money import net_paid
+    by_card = await gift_card_paid(db, order.id)
+    if by_card <= 0:
+        return
+    own = q2(await net_paid(db, order.id) - by_card)
+    if q2(amount) > own + 0.005:
+        raise HTTPException(409, f"{by_card:.2f} of what this job was paid came from a gift card. That goes back "
+                                 f"to the card (Give back to gift card), not as cash: at most {max(own, 0):.2f} "
+                                 "can be refunded here.")
+
+
 async def refund_payments(db: AsyncSession, order: Order, amount: float, **fields) -> list[Payment]:
     """Money handed back on a job (a refund, a deposit given back, a deleted job), W3-C. It comes
     off money held on the job first, then off the job's invoices, newest first, each lowered by
@@ -551,6 +566,8 @@ async def refund_payments(db: AsyncSession, order: Order, amount: float, **field
     the refund finds exactly these rows (refund_rows). Caller commits."""
     from sqlalchemy import func
     await lock_order(db, order.id)
+    if fields.get("method") != "gift_card":
+        await _refuse_gift_card_money_as_cash(db, order, amount)
     held_in, held_out = (float(x or 0) for x in (await db.execute(select(
         func.coalesce(func.sum(case((Payment.kind.in_(MONEY_IN), Payment.amount), else_=0)), 0),
         func.coalesce(func.sum(case((Payment.kind == "refund", func.abs(Payment.amount)), else_=0)), 0))

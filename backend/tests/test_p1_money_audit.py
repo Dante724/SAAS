@@ -165,8 +165,15 @@ async def test_deleting_a_gift_card_line_restores_the_card(client, tenant, db):
     cid = await _client(client, tenant)
     code = (await client.post("/api/giftcards", json={"value": 60, "client_id": cid}, headers=tenant)).json()["code"]
     oid = await _job(client, tenant, cid)
-    r = await client.post(f"/api/orders/{oid}/redeem-giftcard", json={"code": code}, headers=tenant)
-    assert r.status_code == 200, r.text
+    # a gift-card discount line from before FIN-09 (redemptions are payments now): line + ledger row
+    from backend.models import GiftCardLedger, OrderLine
+    g = (await db.execute(select(GiftCard).where(GiftCard.code == code))).scalar_one()
+    g.balance = 0
+    db.add(GiftCardLedger(org_id=g.org_id, gift_card_id=g.id, amount=-60, ref_type="order", ref_id=oid,
+                          note="Redeemed"))
+    db.add(OrderLine(order_id=oid, line_type="fee", kind="custom", line_role="giftcard", ref_id=g.id,
+                     description=f"Gift card {code}", qty=1, unit_price=-60, total=-60))
+    await db.commit()
     line = await _line(client, tenant, oid, "Gift card")
 
     # its price can't be edited away from the ledger
@@ -178,8 +185,8 @@ async def test_deleting_a_gift_card_line_restores_the_card(client, tenant, db):
     card = (await client.get(f"/api/giftcards/{code}", headers=tenant)).json()
     assert card["balance"] == 60, card
     # the card's ledger explains it, and still sums to the balance
+    db.expire_all()
     g = (await db.execute(select(GiftCard).where(GiftCard.code == code))).scalar_one()
-    from backend.models import GiftCardLedger
     amounts = (await db.execute(select(GiftCardLedger.amount).where(GiftCardLedger.gift_card_id == g.id))).scalars().all()
     assert sorted(float(a) for a in amounts) == [-60.0, 60.0, 60.0] and sum(amounts) == g.balance
 

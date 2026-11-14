@@ -318,7 +318,6 @@ async def test_stocktake_above_reserved_leaves_holds_alone(client, tenant, db):
 # give it back through `_reverse_fulfillment`; they need two keyword arguments to use the journal
 # (`journal=line` on the layer draw, `order_id=order.id` on the restore). That edit is outside this
 # group's files and is handed to the lead as a patch; this test turns green with it (drop the marker).
-@pytest.mark.xfail(strict=True, reason="needs the orders.py journal hook (wave-4 follow-up for the lead)")
 async def test_removing_a_job_line_refills_the_layers_it_drew(client, tenant, db):
     loc = await K.loc(client, tenant)
     pid = await K.part(client, tenant, loc, "Screen", 99, 10, qty=0)

@@ -227,19 +227,16 @@ async def test_deleting_lines_after_a_gift_card_cannot_make_money(client, tenant
         headers=tenant)).json()
     r = await client.post(f"/api/orders/{o['id']}/redeem-giftcard", json={"code": code, "amount": 100}, headers=tenant)
     assert r.status_code == 200, r.text
+    # FIN-09: the card paid the job in full, so its invoice is paid and the line can't go from under it
     r = await client.delete(f"/api/orders/{o['id']}/lines/{line['line_id']}", headers=tenant)
-    assert r.status_code == 200, r.text
-    order = (await client.get(f"/api/orders/{o['id']}", headers=tenant)).json()
-    assert float(order["total"]) == 0
-    # the parts of the total still add up to the total
-    assert float(order.get("labour_total") or 0) + float(order.get("parts_total") or 0) == pytest.approx(0)
+    assert r.status_code == 409, r.text
     ctx = (await client.get(f"/api/cash/orders/{o['id']}/payment-context", headers=tenant)).json()
     assert float(ctx["overpaid"]) == 0
     await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=tenant)
     acc = (await client.get("/api/cash/accounts", headers=tenant)).json()["items"][0]["id"]
     r = await client.post(f"/api/cash/orders/{o['id']}/refund", json={"amount": 100, "account_id": acc,
                                                                       "method": "cash"}, headers=tenant)
-    assert r.status_code == 400, r.text
+    assert r.status_code in (400, 409), r.text   # the card's money never comes out of a till
 
 
 # ── M1: a file item can't carry a javascript: link onto the public page ─────

@@ -78,9 +78,10 @@ schema the previous image still works with.
 | Wave 2 schema rules (#221) | w2b01 | Safe for normal use. The new unique indexes and CHECKs also bind the old code: an action the old code allowed and the new rules refuse (a second open drawer at a location, a duplicate code, a negative stock count) gets a database error (500) instead of a bad row. |
 | Exact decimals (#222) | dec08 | Safe, not verified against the old image: the rate/qty columns are NUMERIC now; old code declares them Float, and SQLAlchemy reads NUMERIC into float and binds floats into it. Values are stored rounded to the new scale. |
 | Tenant keys, FKs, hashed track links (audit DB-03/10/12–15/17, SEC-12) | dbi01, dbi02, dbi03 | **Safe on Postgres.** devices/purchase_orders.org_id became NOT NULL behind the same BEFORE INSERT fill trigger as corg01, so the old image's inserts keep working. The new keys bind the old code too: a write naming another shop's record, or a link to a coupon/membership/order line/transaction that doesn't exist, gets a database error (500) instead of a bad row; normal use never does. Tracking links: the old plaintext column is kept and still filled for links issued before the upgrade, so the old image opens those; a link the new image issued (or rotated) has no plaintext and opens again only after rolling forward. dbi03 adds order_lines.created_at with a server default, so lines the old image inserts are stamped too. SQLite (dev) has no triggers: don't roll a dev database back across this. |
+| Redemption roles, money CHECKs, one open shift (wave 4, FIN-03/FIN-09/DB-04/DB-07/DB-16) | w4s01 | **Safe on Postgres.** New columns are nullable or have constant defaults. A job line the old image inserts has no line_role: the `fill_line_role` BEFORE INSERT trigger gives it one by the old description rule, so its gift-card/coupon/points lines stay redemptions. membership_assets.plan_id/live and storage_bins.is_default are kept by triggers whichever image writes. The new rules bind the old code too: a negative payment, an unknown payment kind or transaction status, a zero-qty document line, a second open attendance shift or a second live membership of a plan on one asset gets a database error (500) instead of a bad row. A gift card the NEW image redeemed on a job is a `gift_card` payment; the old image shows it as a payment without a cashbox and would refund it as cash on archive, so don't keep the old image running for long. SQLite (dev): only the old image's line roles aren't filled; don't roll a dev database back across this. |
 
 A database `alembic downgrade` across these is never needed for an image rollback. If one is
-needed anyway, it runs in reverse order (dbi03, dbi02, dbi01, dec08, w2b01, pv01, then corg01), and corg01's downgrade
+needed anyway, it runs in reverse order (w4s01, dbi03, dbi02, dbi01, dec08, w2b01, pv01, then corg01), and corg01's downgrade
 drops org_id from 23 tables: take a backup first.
 
 **Rule for new migrations: NOT NULL and type changes go expand -> contract.** A migration that
@@ -100,6 +101,24 @@ release once no image from before #219 can be started again. dbi01's fill trigge
 purchase_orders are the same kind of bridge. dbi02 is the expand half of hashing the tracking-link
 tokens; its **contract** (a later release, once no image from before dbi02 can start) hashes any row
 still holding only a plaintext token, then empties `orders.public_token` and drops it.
+
+w4s01 is the expand half of two changes:
+
+- **order_lines.line_role** (FIN-03). Contract, once no image from before w4s01 can start: give any
+  row still NULL its role (`UPDATE order_lines SET line_role = 'item' WHERE line_role IS NULL`, in
+  batches), `SET NOT NULL` through a `CHECK (line_role IS NOT NULL) NOT VALID` + `VALIDATE`, set the
+  column default to `'item'`, and drop the `fill_line_role` trigger and function.
+- **The warehouses <-> storage_bins cycle** (DB-16). `warehouses.default_bin_id` points at a bin and
+  `storage_bins.warehouse_id` at its warehouse, so neither table can be created, loaded or dropped
+  before the other (the FK is added with `use_alter`). Release 1 (w4s01, this one) adds
+  `storage_bins.is_default` (one per warehouse, partial unique index) and keeps it equal to
+  `default_bin_id` with triggers; the app still reads and writes `default_bin_id`. **Release 2**, once
+  no image from before w4s01 can start: check the flags still equal `default_bin_id` (the triggers
+  keep them whichever image writes; re-copy them if not), switch
+  `routers/bins.py` (`_default_bin_ids`, `_set_default`) and `services/stock_rows.py` (the default-bin
+  lookup) to read and write `is_default`, drop the triggers and the `fk_warehouses_default_bin`
+  constraint (that breaks the cycle), and drop `warehouses.default_bin_id` in a later release still
+  (release-2 code no longer reads it, but a release-1 image does).
 
 ### Migrations and live traffic
 
@@ -128,9 +147,10 @@ behind it until it commits. Time each one on a restored copy of production first
 | dbi01 | One short step at a time, each committed on its own: devices/purchase_orders backfilled 5000 rows per batch and made NOT NULL through a CHECK added NOT VALID and VALIDATEd; 32 indexes built and 46 dropped `CONCURRENTLY`; 58 foreign keys added `NOT VALID` (a SHARE ROW EXCLUSIVE lock on the table and its parent for milliseconds, no scan: writes on those two wait that long) and then VALIDATEd (reads and writes go on). The two cascade swaps (credit_note_lines, serial_events) are one ALTER each (drop + add NOT VALID), then VALIDATE. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
 | dbi02 | Three nullable columns on orders and one on organisations (instant), tokens hashed 2000 orders per batch (row locks only), one unique index built `CONCURRENTLY`. | No. |
 | dbi03 | order_lines.created_at added and given a default (both catalog-only, instant), then existing lines stamped 1000 jobs per batch, each batch its own transaction (row locks only). | No. |
+| w4s01 | One short step at a time, each committed on its own: five columns added (catalog-only: nullable or a constant default), triggers created, repairs and backfills 5000 rows per statement walking the primary key (row locks only), 11 CHECKs added `NOT VALID` (a brief ACCESS EXCLUSIVE lock, no scan) then VALIDATEd (reads and writes go on), three partial unique indexes built `CONCURRENTLY`. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
 | dec08 (#222) | One transaction: 30 tables rewritten, one ALTER each (organisations, orders, order_lines, transactions, stock_movements, stock_levels, sale_lines, invoice_lines are the busy ones), all ACCESS EXCLUSIVE (no reads or writes) until the end. Peak extra disk: about one copy of each table. | **Yes.** Stop the app (or show maintenance) while it runs. |
 
-w2b01, dec08 and dbi01 check the data first and stop with counts (nothing changed) on what they
+w2b01, dec08, dbi01 and w4s01 check the data first and stop with counts (nothing changed) on what they
 can't repair: w2b01 on unknown status values, dec08 on values NUMERIC can't hold (out of range,
 ±Infinity, NaN), dbi01 on rows that point at another shop's record, devices/POs that no link gives
 a shop, links to transactions or required links that point at nothing, and payroll idempotency
@@ -141,6 +161,15 @@ that is lost) and logs the count per column (`alembic.dbi01`). w2b01 renames dup
 keeps its code, the others get `-2`, `-3`…) and records each rename in the shop's audit log
 (`gift_card.code_renamed`, `coupon.code_renamed`, `sale.sale_number_renamed`…): tell the shop to
 check it, since a customer holding a renamed card or coupon must now use the new code.
+
+w4s01 stops on a negative payment or prepayment, an unknown payment kind or transaction status, a
+document line (sale, client return, transfer, purchase return, write-off, posting, credit note) with
+qty 0, and an asset covered by two live memberships of one plan; it lists counts per table only.
+It repairs, logging counts (`alembic.w4s01`): a refund stored negative is stored positive, and an
+employee's duplicate open attendance shifts close
+at their own start with 0 hours and `needs_review` (the newest stays open), as clock-out already did.
+Run the "Duplicate open attendance shifts" query below before deploying it and check those employees'
+hours.
 
 ### Duplicate open attendance shifts (check before and after deploy)
 

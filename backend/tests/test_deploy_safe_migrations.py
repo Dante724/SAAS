@@ -221,6 +221,10 @@ _NEUTRAL = {"integer": "0", "bigint": "0", "smallint": "0", "numeric": "0", "dou
             "real": "0", "boolean": "false", "date": "current_date", "json": "'{}'", "jsonb": "'{}'"}
 
 
+# columns w4s01 (and later) CHECK: the filler must be a value the rule allows
+_VALID = {("payments", "kind"): "'payment'", ("transactions", "status"): "'active'"}
+
+
 class Raw(str):
     """A literal SQL value (e.g. 'NaN'::float8), inserted as written."""
 
@@ -233,7 +237,8 @@ def _pg_insert(url: str, table: str, values: dict) -> str:
            for k, v in values.items()}
     for name, typ in cols:
         if name not in lit and name != "org_id":      # old code never sends org_id
-            lit[name] = "now()" if typ.startswith("timestamp") else _NEUTRAL.get(typ, "'x'")
+            lit[name] = _VALID.get((table, name)) or ("1" if name == "qty" else None) or (
+                "now()" if typ.startswith("timestamp") else _NEUTRAL.get(typ, "'x'"))
     return f"INSERT INTO {table} ({', '.join(lit)}) VALUES ({', '.join(lit.values())})"
 
 
