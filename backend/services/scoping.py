@@ -72,6 +72,26 @@ def scope_orders(q, role: Optional[Role], current: Employee):
     return q
 
 
+def allowed_locations(role: Optional[Role]) -> Optional[list]:
+    """Locations a role may see and act on. None = all; [] = none (SEC-03: "selected" with
+    nothing picked allows nothing)."""
+    if not role or (role.location_scope or "all") != "selected":
+        return None
+    return _ids(role.location_ids)
+
+
+def scope_sales(q, role: Optional[Role]):
+    """SEC-06: restrict a counter-Sale query to the role's locations."""
+    from backend.models import Sale
+    allowed = allowed_locations(role)
+    return q if allowed is None else q.where(Sale.location_id.in_(allowed))
+
+
+def may_use_location(role: Optional[Role], location_id: Optional[str]) -> bool:
+    allowed = allowed_locations(role)
+    return allowed is None or location_id is None or location_id in allowed
+
+
 def allowed_warehouses(role: Optional[Role]) -> Optional[list]:
     """Location ids this role may act on in inventory. None = all."""
     if not role or (role.warehouse_scope or "all") == "all":

@@ -577,9 +577,12 @@ async def client_documents(
 ):
     """All work orders for this client (Orderry's Documents tab in the contact profile)."""
     from backend.models import Order
+    from backend.services import scoping
     await get_owned_or_404(db, Client, client_id, current.org_id, "client")
-    orders = (await db.execute(
-        select(Order).where(Order.client_id == client_id, Order.org_id == current.org_id)
+    # SEC-05: the same record scope as the job list (own jobs, locations, hidden statuses)
+    orders = (await db.execute(scoping.scope_orders(
+        select(Order).where(Order.client_id == client_id, Order.org_id == current.org_id),
+        await scoping.role_for(db, current), current)
         .order_by(Order.created_at.desc())
     )).scalars().all()
     return {"items": [{"id": o.id, "order_number": o.order_number, "status": o.status,
@@ -603,13 +606,15 @@ async def client_purchases(
         raise HTTPException(404, "Client not found")
 
     from backend.models import Order, Sale, SaleLine
+    from backend.services import scoping
+    role = await scoping.role_for(db, current)
 
     items: list[dict] = []
 
-    # ── POS sales ──
-    sales = (await db.execute(
-        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id, Sale.voided_at.is_(None))
-        .order_by(Sale.created_at.desc()))).scalars().all()
+    # ── POS sales ── (SEC-05/06: only the role's locations, as the sales list)
+    sales = (await db.execute(scoping.scope_sales(
+        select(Sale).where(Sale.client_id == client_id, Sale.org_id == current.org_id, Sale.voided_at.is_(None)),
+        role).order_by(Sale.created_at.desc()))).scalars().all()
     # Fetch every sale's lines in ONE query, then group — avoids an N+1 (a query per sale).
     sale_lines: dict[str, list] = {}
     if sales:
@@ -626,8 +631,9 @@ async def client_purchases(
             })
 
     # ── work-order billing (parts, labour, fees the customer was charged for) ──
-    orders = (await db.execute(
-        select(Order).where(Order.client_id == client_id, Order.org_id == current.org_id)
+    # SEC-05: only the jobs this role may open (a colleague's job showed its line prices here)
+    orders = (await db.execute(scoping.scope_orders(
+        select(Order).where(Order.client_id == client_id, Order.org_id == current.org_id), role, current)
         .options(selectinload(Order.lines)).order_by(Order.created_at.desc())
     )).scalars().all()
     kind_of = {"part": "product", "labour": "service", "fee": "fee"}

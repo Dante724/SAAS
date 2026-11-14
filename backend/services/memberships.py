@@ -403,6 +403,66 @@ async def remaining(db: AsyncSession, m: Membership, item: MembershipPlanItem,
                - await _pending_lines(db, m, item.service_id or "", exclude_line))
 
 
+async def plan_items_by_plan(db: AsyncSession, plan_ids) -> dict[str, list[MembershipPlanItem]]:
+    """plan_items() for many plans in one query (QA-5: the list ran it per row)."""
+    out: dict[str, list[MembershipPlanItem]] = {}
+    ids = sorted({p for p in plan_ids if p})
+    if ids:
+        for it in (await db.execute(select(MembershipPlanItem).where(
+                MembershipPlanItem.plan_id.in_(ids), MembershipPlanItem.sort_order >= 0)
+                .order_by(MembershipPlanItem.sort_order))).scalars().all():
+            out.setdefault(it.plan_id, []).append(it)
+    return out
+
+
+async def usage_counts(db: AsyncSession, membership_ids) -> dict[tuple, float]:
+    """_used() for many members in one query: {(membership_id, service_id, term_start): qty}."""
+    ids = sorted({i for i in membership_ids if i})
+    if not ids:
+        return {}
+    rows = (await db.execute(select(
+        MembershipUsage.membership_id, MembershipPlanItem.service_id, MembershipUsage.term_start,
+        func.coalesce(func.sum(MembershipUsage.qty), 0))
+        .join(MembershipPlanItem, MembershipPlanItem.id == MembershipUsage.plan_item_id).where(
+        MembershipUsage.membership_id.in_(ids), MembershipPlanItem.kind == "service",
+        MembershipPlanItem.service_id.isnot(None))     # _used() matches no row for a NULL service
+        .group_by(MembershipUsage.membership_id, MembershipPlanItem.service_id,
+                  MembershipUsage.term_start))).all()
+    return {(mid, sid, ts): float(n or 0) for mid, sid, ts, n in rows}
+
+
+async def pending_counts(db: AsyncSession, membership_ids) -> dict[tuple, float]:
+    """_pending_lines() for many members in one query: {(membership_id, service_id): qty}."""
+    ids = sorted({i for i in membership_ids if i})
+    if not ids:
+        return {}
+    rows = (await db.execute(select(OrderLine.membership_id, OrderLine.ref_id,
+                                    func.coalesce(func.sum(OrderLine.qty), 0))
+        .join(Order, Order.id == OrderLine.order_id).where(
+        OrderLine.membership_id.in_(ids), OrderLine.kind == "service",
+        OrderLine.discount >= 100, Order.closed_at.is_(None), Order.is_estimate == False,  # noqa: E712
+        ~select(MembershipUsage.id).where(MembershipUsage.order_line_id == OrderLine.id).exists())
+        .group_by(OrderLine.membership_id, OrderLine.ref_id))).all()
+    return {(mid, ref): float(n or 0) for mid, ref, n in rows}
+
+
+def allowance_from(m: Membership, item: MembershipPlanItem, tzname: str, used: dict) -> float:
+    """allowance() from preloaded usage_counts() (same rule, no queries)."""
+    total = float(item.qty or 0)
+    if item.rollover:
+        prev_start = add_months(m.term_start, -12)
+        if m.created_at and utc_to_wall(m.created_at, tzname).date() <= prev_start:
+            total += max(0.0, float(item.qty or 0) - used.get((m.id, item.service_id, prev_start), 0.0))
+    return total
+
+
+def remaining_from(m: Membership, item: MembershipPlanItem, tzname: str, used: dict, pending: dict) -> float:
+    """remaining() from preloaded usage_counts() / pending_counts() (same rule, no queries)."""
+    return max(0.0, allowance_from(m, item, tzname, used)
+               - used.get((m.id, item.service_id, m.term_start), 0.0)
+               - pending.get((m.id, item.service_id or ""), 0.0))
+
+
 def _discount_fits(item: MembershipPlanItem, line: OrderLine) -> bool:
     t = (line.line_type or "").lower()
     if item.applies_to == "both":
@@ -716,14 +776,38 @@ async def sync_payments(db: AsyncSession, org_id: str, membership_id: Optional[s
     q = select(MembershipPeriod).where(MembershipPeriod.org_id == org_id, MembershipPeriod.paid_at.is_(None))
     if membership_id:
         q = q.where(MembershipPeriod.membership_id == membership_id)
+    return await _mark_paid(db, (await db.execute(q)).scalars().all())
+
+
+async def sync_paid_by(db: AsyncSession, *, invoice_ids=(), order_ids=()) -> int:
+    """QA-5: called where money comes in (services/invoice_money), so a plan period is marked paid
+    (and a paused member un-paused) in the same transaction as the payment, instead of on every
+    GET of the memberships list. Only periods billed on these invoices / jobs are looked at: one
+    indexed query when nothing matches. The hourly sweep's sync_payments() stays the fallback."""
+    from sqlalchemy import or_
+    inv = sorted({i for i in invoice_ids if i})
+    orders = sorted({o for o in order_ids if o})
+    if not inv and not orders:
+        return 0
+    conds = []
+    if inv:
+        conds.append(MembershipPeriod.invoice_id.in_(inv))
+    if orders:
+        conds.append(MembershipPeriod.order_id.in_(orders))
+    return await _mark_paid(db, (await db.execute(select(MembershipPeriod).where(
+        MembershipPeriod.paid_at.is_(None), or_(*conds)))).scalars().all())
+
+
+async def _mark_paid(db: AsyncSession, periods) -> int:
     n = 0
-    today = None
-    for p in (await db.execute(q)).scalars().all():
+    todays: dict[str, date] = {}
+    for p in periods:
         if await period_paid(db, p):
             p.paid_at = now_utc()
             m = (await db.execute(select(Membership).where(Membership.id == p.membership_id))).scalar_one_or_none()
-            today = today or await shop_today(db, org_id)
-            if m and m.status == "paused" and not await _unpaid_started(db, m, today):
+            if p.org_id not in todays:
+                todays[p.org_id] = await shop_today(db, p.org_id)
+            if m and m.status == "paused" and not await _unpaid_started(db, m, todays[p.org_id]):
                 m.status = "active"
             n += 1
     if n:

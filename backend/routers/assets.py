@@ -463,9 +463,11 @@ async def get_asset(
         Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
     if not d:
         raise HTTPException(404, "Asset not found")
-    # full work-order history for this asset
-    orders = (await db.execute(
-        select(Order).where(Order.device_id == asset_id)
+    # full work-order history for this asset — SEC-05: the jobs this role may open, as the job list
+    from backend.services import scoping
+    orders = (await db.execute(scoping.scope_orders(
+        select(Order).where(Order.device_id == asset_id, Order.org_id == current.org_id),
+        await scoping.role_for(db, current), current)
         .order_by(desc(Order.created_at))
     )).scalars().all()
     owner = None
