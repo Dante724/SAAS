@@ -20,9 +20,11 @@ Without the header nothing changes (claim.active is False and finish/release do 
 The key is reserved (committed) before the work starts, so two concurrent requests with one key
 can't both run: the second sees the reservation and gets a 409 telling it to retry shortly.
 
-Pass `body=` (what was asked: path ids and the request body) and the key is bound to it: the same
-key sent with a different request is a 422, not the first request's answer. `run_once` wraps the
-whole begin / work / finish-or-release dance for a handler.
+The key is bound to the request it was first sent with: its method, path, query string and body
+(`body=` when the caller passes one, else the JSON body FastAPI already read). The same key sent
+with a different request (another amount, another job) is a 422, not the first request's answer
+(BE-5 / SEC-21: callers without `body=` used to replay it). `run_once` wraps the whole
+begin / work / finish-or-release dance for a handler.
 
 Money safety:
 - The work's first commit also stamps the key's `committed_at`, in the same transaction. From then
@@ -79,10 +81,15 @@ class Claim:
 
     def _watch(self, db) -> None:
         """Stamp committed_at in the same transaction as each commit the work makes, and refuse
-        that commit if a retry has taken the key over."""
+        that commit if a retry has taken the key over. Only the real COMMIT counts: SQLAlchemy
+        fires these events for a SAVEPOINT release too (every audit.record runs in one), and a
+        work that failed after one had committed nothing, so its key must stay free (BE-1)."""
+        from backend.services.after_commit import is_outermost
         sess = getattr(db, "sync_session", db)
 
         def before_commit(session):
+            if not is_outermost(session):
+                return
             res = session.execute(update(IdempotencyRecord).where(self._mine()).values(
                 committed_at=func.coalesce(IdempotencyRecord.committed_at, datetime.utcnow()))
                 .execution_options(synchronize_session=False))
@@ -90,7 +97,8 @@ class Claim:
                 raise HTTPException(409, TAKEN_OVER)
 
         def after_commit(session):
-            self.committed = True
+            if is_outermost(session):
+                self.committed = True
 
         event.listen(sess, "before_commit", before_commit)
         event.listen(sess, "after_commit", after_commit)
@@ -147,13 +155,33 @@ def request_hash(body: Any) -> str:
                                      default=str).encode()).hexdigest()
 
 
+def _request_digest(request: Any, body: Any) -> Optional[str]:
+    """What the key is bound to: method, path, query and body. `body` is what the caller passed;
+    without one, the request's own body, read from Starlette's cache (FastAPI has already read it
+    to build the handler's model; the stream itself is never touched here). Parsed as JSON, so a
+    retry that only reorders keys or spacing still matches."""
+    url = getattr(request, "url", None)
+    method, path = getattr(request, "method", None), getattr(url, "path", None)
+    query = getattr(url, "query", None) or None
+    if body is None:
+        raw = getattr(request, "_body", None)
+        if isinstance(raw, (bytes, bytearray)) and raw:
+            try:
+                body = json.loads(raw)
+            except ValueError:
+                body = {"sha256": hashlib.sha256(raw).hexdigest()}
+    if method is None and path is None and body is None:
+        return None
+    return request_hash({"method": method, "path": path, "query": query, "body": body})
+
+
 async def idem_begin(db, org_id: str, request: Request, endpoint: str, *, body: Any = None) -> Claim:
     key = (request.headers.get(HEADER) or "").strip() if request is not None else ""
     if not key:
         return Claim()
     if len(key) > 80:
         raise HTTPException(400, "Idempotency-Key is too long (80 characters at most)")
-    digest = request_hash(body) if body is not None else None
+    digest = _request_digest(request, body)
     existing = (await db.execute(select(IdempotencyRecord).where(
         IdempotencyRecord.org_id == org_id, IdempotencyRecord.key == key)
         .execution_options(populate_existing=True))).scalar_one_or_none()
@@ -206,7 +234,7 @@ async def idem_begin(db, org_id: str, request: Request, endpoint: str, *, body: 
 
 async def run_once(db, org_id: str, request: Optional[Request], endpoint: str, body: Any,
                    work: Callable[[], Awaitable[Any]]) -> Any:
-    """Run `work()` once per Idempotency-Key (and request body); a retry gets the first answer."""
+    """Run `work()` once per Idempotency-Key (bound to this request); a retry gets the first answer."""
     claim = await idem_begin(db, org_id, request, endpoint, body=body)
     if claim.replay is not None:
         return claim.replay
