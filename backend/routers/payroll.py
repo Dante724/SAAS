@@ -65,6 +65,22 @@ def _ser_rule(r: CommissionRule) -> dict:
 
 
 
+async def _flagged_in_period(db, org_id: str, employee_id: str, ps, pe) -> list:
+    """Decision 6: this person's time entries and shifts flagged for review on the shop's days
+    ps..pe (the days an accrual's ledger sums cover, _shop_days). Any of them holds the accrual up."""
+    from backend.services.dates import day_end_utc, day_start_utc, shop_tzname
+    from backend.services.time_review import flagged_time
+    tz = await shop_tzname(db, org_id)
+    return await flagged_time(db, org_id, [employee_id], day_start_utc(ps, tz), day_end_utc(pe, tz), tz)
+
+
+async def _assert_period_reviewed(db, org_id: str, employee_id: str, ps, pe) -> None:
+    from backend.services.time_review import blocked_detail
+    flagged = await _flagged_in_period(db, org_id, employee_id, ps, pe)
+    if flagged:
+        raise HTTPException(409, blocked_detail(flagged))
+
+
 async def _shop_days(db, org_id: str, ps, pe) -> tuple:
     """Ledger entries made on the shop's days ps..pe (created_at is naive UTC, periods are shop days)."""
     from backend.services.dates import day_end_utc, day_start_utc, shop_tzname
@@ -396,6 +412,7 @@ async def create_payroll_run(
             PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
         if dupe:
             raise HTTPException(409, "An accrual already covers part of this period for this employee")
+        await _assert_period_reviewed(db, current.org_id, data.employee_id, ps, pe)
     # sum commissions already accrued in the window
     commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == current.org_id,
@@ -523,6 +540,15 @@ async def create_payroll_runs_bulk(
             if dupe:
                 skipped += 1
                 results.append({"employee_id": emp.id, "status": "skipped", "reason": "already accrued for part of this period"})
+                continue
+            # decision 6: flagged time holds this person's accrual up; the rest of the team goes on
+            flagged = await _flagged_in_period(db, current.org_id, emp.id, ps, pe)
+            if flagged:
+                from backend.services.time_review import blocked_detail
+                d = blocked_detail(flagged)
+                skipped += 1
+                results.append({"employee_id": emp.id, "status": "skipped", "reason": d["message"],
+                                "flagged": d["flagged"]})
                 continue
         try:
             # base salary applies only to fixed-wage staff, matching /calculation
@@ -950,6 +976,7 @@ async def accrue_calculation(
         PayrollRun.period_start <= pe, PayrollRun.period_end >= ps))).scalars().first()   # any overlap
     if dupe:
         raise HTTPException(409, "An accrual already covers part of this period for this employee")
+    await _assert_period_reviewed(db, current.org_id, data.employee_id, ps, pe)
 
     commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
         EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == data.employee_id,
@@ -1021,6 +1048,10 @@ async def post_attendance_wages(
     # Two postings for one person queue up here, so both can't see a shift as unpaid.
     await db.execute(select(Employee.id).where(Employee.id == emp.id).with_for_update(key_share=True))
     tz = await shop_timezone(db, emp)
+    # Decision 6: a flagged shift in the window holds up the whole window until a manager corrects it.
+    from backend.services.time_review import assert_nothing_flagged
+    await assert_nothing_flagged(db, current.org_id, [emp.id], day_start_utc(start, tz), day_end_utc(end, tz), tz,
+                                 entries=False)
     shifts = (await db.execute(select(Shift).where(
         Shift.employee_id == data.employee_id, Shift.ended_at.isnot(None),
         Shift.started_at >= day_start_utc(start, tz),

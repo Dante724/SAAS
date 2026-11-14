@@ -177,6 +177,7 @@ async def shift_clock_out(db: AsyncSession = Depends(get_db),
                                          "elapsed_hours": float(q2((end - o.started_at).total_seconds() / 3600)),
                                          "cap_hours": SHIFT_CAP_HOURS})
                 end = cap
+                o.needs_review = True          # decision 6: holds up payroll until a manager corrects it
             o.ended_at = end
             o.hours_worked = q2(_shift_elapsed(o) / 3600.0)
         else:
@@ -348,34 +349,38 @@ async def correct_shift(
     end = _udt(data.ended_at, "ended_at") if data.ended_at else s.ended_at
     if end is None:
         raise HTTPException(400, "Give the time this shift ended")
-    if end <= start:
-        raise HTTPException(400, "A shift must end after it starts")
-    if end > now_utc() + timedelta(minutes=1):
-        raise HTTPException(400, "A shift can't end in the future")
-    if end - start > timedelta(hours=24):
-        raise HTTPException(400, "A shift can't be longer than 24 hours")
-    clash = (await db.execute(select(Shift.id).where(
-        Shift.employee_id == s.employee_id, Shift.id != s.id, Shift.started_at < end,
-        func.coalesce(Shift.ended_at, now_utc()) > start).limit(1))).first()
-    if clash:
-        raise HTTPException(409, "That overlaps another shift of this person")
+    # Decision 6: a manager may confirm a flagged shift as it is (a reason, no new times), e.g. a
+    # duplicate w4s01 closed at its own start with 0 hours; only changed times are re-validated.
+    if (start, end) != (s.started_at, s.ended_at):
+        if end <= start:
+            raise HTTPException(400, "A shift must end after it starts")
+        if end > now_utc() + timedelta(minutes=1):
+            raise HTTPException(400, "A shift can't end in the future")
+        if end - start > timedelta(hours=24):
+            raise HTTPException(400, "A shift can't be longer than 24 hours")
+        clash = (await db.execute(select(Shift.id).where(
+            Shift.employee_id == s.employee_id, Shift.id != s.id, Shift.started_at < end,
+            func.coalesce(Shift.ended_at, now_utc()) > start).limit(1))).first()
+        if clash:
+            raise HTTPException(409, "That overlaps another shift of this person")
     before = {"started_at": utc_iso(s.started_at), "ended_at": utc_iso(s.ended_at),
-              "hours_worked": float(q2(s.hours_worked or 0))}
+              "hours_worked": float(q2(s.hours_worked or 0)), "needs_review": bool(s.needs_review)}
     old_hours = float(s.hours_worked or 0)
     legacy_rate = await _legacy_shift_rate(db, current.org_id, s)    # read before the times move
     s.started_at, s.ended_at = start, end
     s.hours_worked = q2((end - start).total_seconds() / 3600.0)
+    s.needs_review = False                 # decision 6: a manager's correction resolves the review
     await db.flush()
     wage_change = await _reprice_paid_shift(db, current.org_id, s, old_hours, legacy_rate)
     after = {"started_at": utc_iso(s.started_at), "ended_at": utc_iso(s.ended_at),
-             "hours_worked": float(q2(s.hours_worked))}
+             "hours_worked": float(q2(s.hours_worked)), "needs_review": False}
     diff = {k: [before[k], after[k]] for k in before if before[k] != after[k]}
     diff.update(reason=data.reason.strip(), wage_change=float(wage_change))
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="shift.correct",
                        entity_type="shift", entity_id=s.id, diff=diff)
     await db.commit()
     await db.refresh(s)
-    return {"ok": True, "shift": _ser_shift(s), "wage_change": float(wage_change)}
+    return {"ok": True, "shift": _ser_shift(s, bool(s.needs_review)), "wage_change": float(wage_change)}
 
 
 @router.get("/shifts/{shift_id}/audit")
@@ -1070,6 +1075,11 @@ async def edit_entry(
         # forgotten clock-out), but the entry is flagged so whoever approves it looks at it.
         if e.employee_id == current.id and not await _can_manage(db, current):
             e.needs_review = True
+    # Decision 6: a manager's edit (a correction, or saving it unchanged to confirm it) resolves a
+    # flagged entry, so payroll can approve its period. Never the person's own edit.
+    if e.needs_review and e.employee_id != current.id and await _can_manage(db, current):
+        _audit(db, e, "edit", current.id, field="needs_review", old=True, new=False)
+        e.needs_review = False
     if e.ended_at:
         e.duration_sec = int((e.ended_at - e.started_at).total_seconds())
     warn = await _apply_labour_billing(db, e)   # reprice the labour line if time changed
@@ -1125,6 +1135,13 @@ async def approve_entry(
     await db.refresh(e)
     if e.state != "stopped":
         raise HTTPException(409, "This entry changed meanwhile; reload and try again")
+    if e.needs_review:              # decision 6: a manager resolves it with Edit first
+        from backend.services.time_review import blocked_detail, flagged_time
+        tz = await _emp_tz(db, current.org_id, e.employee_id)
+        flagged = [f for f in await flagged_time(db, current.org_id, [e.employee_id], e.started_at,
+                                                 e.started_at + timedelta(seconds=1), tz, shifts=False)
+                   if f["id"] == e.id]
+        raise HTTPException(409, blocked_detail(flagged))
     _audit(db, e, "approve", current.id, field="state", old=e.state, new="approved")
     e.state = "approved"
     e.approved_by_id = current.id
@@ -1689,6 +1706,9 @@ async def approve_timesheet(
     tz = await shop_timezone(db, emp)
     start, end = _window(data.date_from, data.date_to, tz)
     await _lock_employee(db, emp.id)
+    # Decision 6: a flagged entry in the window holds up the whole window until a manager edits it.
+    from backend.services.time_review import assert_nothing_flagged
+    await assert_nothing_flagged(db, current.org_id, [emp.id], start, end, tz, shifts=False)
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == data.employee_id,
         TimeEntry.state == "stopped", TimeEntry.started_at >= start,
