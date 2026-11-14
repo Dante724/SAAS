@@ -118,6 +118,27 @@ def parse_dt(value, field: str = "date") -> datetime:
         raise HTTPException(400, f"Invalid {field}: expected an ISO datetime, got {value!r}")
 
 
+async def parse_money_moment(db, org_id: str, value, field: str = "date") -> tuple[datetime, date]:
+    """When money moved, from a backdated payment / cash entry: (naive UTC instant, shop day).
+
+    A date-only value (what the Record payment and cash entry forms send) is that day on the shop's
+    clock: now if it is today there, else noon shop time, so reports that bucket by the shop's day
+    (day_start_utc / report_edge) put it on that day. It used to be stored as UTC midnight, the
+    shop's previous day anywhere west of UTC (BE-3). A value with a zone is that instant; a naive
+    value with a time is taken as UTC, as before."""
+    tzname = await shop_tzname(db, org_id)
+    raw = value.strip() if isinstance(value, str) else value
+    if isinstance(raw, str) and len(raw) == 10:
+        day = parse_date(raw, field)
+        if day == today_in(tzname):
+            return now_utc(), day
+        return wall_to_utc(datetime.combine(day, time(12, 0)), tzname), day
+    dt = parse_dt(raw, field)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt, utc_to_wall(dt, tzname).date()
+
+
 def parse_date(value, field: str = "date") -> date:
     try:
         return date.fromisoformat(value)
