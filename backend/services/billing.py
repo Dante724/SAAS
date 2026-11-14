@@ -658,7 +658,11 @@ async def sync_seats(db: AsyncSession, org_id: str) -> None:
 
 HANDLED_EVENTS = ("checkout.session.completed", "customer.subscription.created",
                   "customer.subscription.updated", "customer.subscription.deleted",
-                  "invoice.payment_failed")
+                  "invoice.payment_failed", "invoice.paid", "invoice.payment_succeeded")
+
+# Events that can move sub_end (the paid-until date, owner rule "Yes to both"). Nothing else does:
+# a failed or refunded payment, an unpaid invoice or a non-active subscription leaves it alone.
+PAID_INVOICE_EVENTS = ("invoice.paid", "invoice.payment_succeeded")
 
 # Stripe subscription status -> sub_status. "incomplete" means the first payment hasn't gone
 # through yet: leave the shop as it is.
@@ -707,6 +711,81 @@ def _apply_subscription(org: Organisation, sub: dict) -> None:
     org.cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
     end = sub.get("current_period_end") or item.get("current_period_end")
     org.billing_period_end = _ts_date(end) or org.billing_period_end
+
+
+def _sub_id(obj: dict) -> Optional[str]:
+    """The subscription an invoice or subscription object belongs to (old and 2025+ API shapes)."""
+    if obj.get("object") == "subscription":
+        return obj.get("id") if isinstance(obj.get("id"), str) else None
+    sub = obj.get("subscription")
+    if isinstance(sub, str):
+        return sub
+    sub = ((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription")
+    return sub if isinstance(sub, str) else None
+
+
+def _paid_until(etype: str, obj: dict) -> Optional[date]:
+    """The paid-until date this event proves, or None when it proves no payment.
+
+    A paid invoice: the latest end of its subscription lines' periods (the invoice's own
+    period_end is the period just billed for usage, not the one paid ahead). An active
+    subscription: its current_period_end (on the item in newer API versions)."""
+    if etype in PAID_INVOICE_EVENTS:
+        if obj.get("object") != "invoice" or obj.get("status") != "paid" or obj.get("paid") is False:
+            return None
+        ends = []
+        for line in ((obj.get("lines") or {}).get("data") or []):
+            parent = line.get("parent") or {}
+            if line.get("type") == "subscription" or parent.get("type") == "subscription_item_details" \
+                    or parent.get("subscription_item_details"):
+                ends.append(_ts_date((line.get("period") or {}).get("end")))
+        ends = [d for d in ends if d]
+        return max(ends) if ends else None
+    if etype == "customer.subscription.updated":
+        if obj.get("object") != "subscription" or obj.get("status") != "active":
+            return None
+        items = ((obj.get("items") or {}).get("data") or [])
+        item = next((i for i in items if not _is_seat_item(i)), {})
+        return _ts_date(obj.get("current_period_end") or item.get("current_period_end"))
+    return None
+
+
+async def _owned_by(db: AsyncSession, org: Organisation, obj: dict) -> bool:
+    """Every shop id the event carries points at this shop and none at another, and at least
+    one of them is this shop's own (its Stripe customer, its subscription or its org id)."""
+    meta = obj.get("metadata") or {}
+    sub_meta = ((obj.get("subscription_details") or {}).get("metadata")
+                or (((obj.get("parent") or {}).get("subscription_details") or {}).get("metadata"))
+                or {})
+    named = {v for v in (meta.get("org_id"), sub_meta.get("org_id"), obj.get("client_reference_id")) if v}
+    if named - {org.id}:
+        return False
+    customer = obj.get("customer") if isinstance(obj.get("customer"), str) else None
+    sub_id = _sub_id(obj)
+    for value, column in ((customer, Organisation.stripe_customer_id),
+                          (sub_id, Organisation.stripe_subscription_id)):
+        if value and (await db.execute(select(Organisation.id).where(
+                column == value, Organisation.id != org.id).limit(1))).first():
+            return False
+    if customer and org.stripe_customer_id and customer != org.stripe_customer_id:
+        return False
+    return bool((customer and customer == org.stripe_customer_id)
+                or (sub_id and sub_id == org.stripe_subscription_id) or org.id in named)
+
+
+async def _extend_sub_end(db: AsyncSession, org: Organisation, paid_until: date,
+                          event_id: str, etype: str) -> None:
+    """Move sub_end forward to paid_until, never back, and log the change in the admin action log
+    (before/after, the event id as target) in the same transaction."""
+    from backend.services import admin_log
+    new_end = max(d for d in (org.sub_end, paid_until) if d is not None)
+    if new_end == org.sub_end:
+        return
+    before = {"sub_end": org.sub_end.isoformat() if org.sub_end else None}
+    org.sub_end = new_end
+    await admin_log.write(db, admin=None, action="stripe_renewal", org_id=org.id, target=event_id,
+                          before=before, after={"sub_end": new_end.isoformat()},
+                          reason=f"Stripe {etype} {event_id}")
 
 
 async def _find_org(db: AsyncSession, obj: dict) -> Optional[Organisation]:
@@ -763,6 +842,11 @@ async def handle_event(db: AsyncSession, event: dict) -> dict:
         await db.commit()
         return {"ok": True, "ignored": "customer mismatch"}
 
+    # Decided before the event is applied: applying a subscription rewrites the shop's Stripe ids.
+    paid_until = _paid_until(etype, obj)
+    if paid_until is not None and (_mode(org) == "custom" or not await _owned_by(db, org, obj)):
+        paid_until = None           # a custom-billed shop's term is the admin's; a foreign event moves nothing
+
     created = event.get("created")
     created = int(created) if isinstance(created, (int, float)) else None
     # Stripe doesn't promise order: an event older than the last one applied doesn't change status.
@@ -796,8 +880,14 @@ async def handle_event(db: AsyncSession, event: dict) -> dict:
         if not stale and org.sub_status == "active":
             org.sub_status = "past_due"
             org.past_due_since = org.past_due_since or platform_today()
+    elif etype in PAID_INVOICE_EVENTS:
+        pass                        # only moves sub_end (below); status comes from subscription events
 
-    if created is not None and not stale:
+    if paid_until is not None:      # max(current, new): an older event can't move it back
+        await _extend_sub_end(db, org, paid_until, event_id, etype)
+
+    # A paid invoice changes no status, so it doesn't advance the clock that orders status changes.
+    if created is not None and not stale and etype not in PAID_INVOICE_EVENTS:
         org.billing_event_at = created
     await db.commit()
     return {"ok": True}

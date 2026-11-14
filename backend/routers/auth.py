@@ -906,7 +906,15 @@ async def me(current: Employee = Depends(get_current_employee),
         # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app
         # hides what the plan lacks (the server enforces the same in services/billing.py).
         "billing": await _billing_summary(db, org),
+        # Owner decision 7: a lapsed term (sub_end passed) keeps a week's grace; the app shows the
+        # owner a "renew" banner until grace_ends_at (services/org_live).
+        "subscription": _lapse_info(org),
     }
+
+
+def _lapse_info(org):
+    from backend.services.org_live import lapse_info
+    return lapse_info(org)
 
 
 async def _billing_summary(db, org):

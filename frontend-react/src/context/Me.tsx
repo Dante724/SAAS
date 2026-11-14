@@ -23,6 +23,9 @@ export type Me = {
   support?: { email?: string; url?: string };
   card_readers?: boolean;   // card readers switched on for this server (off by default)
   billing?: Billing | null;
+  // Owner decision 7: the term ended (sub_end passed) and the shop is in its week of grace
+  // (backend services/org_live.lapse_info). The owner sees a "renew" banner until grace_ends_at.
+  subscription?: { lapsed: boolean; sub_end?: string | null; grace_ends_at?: string | null } | null;
 };
 
 // Tekly subscription (backend services/billing.py summary). `features` lists the plan features

@@ -435,7 +435,8 @@ async def patch_tenant(org_id: str, data: PatchTenant, ctx: AdminCtx = Depends(r
     if "price_locked_until" in p:
         org.price_locked_until = _parse_date(p["price_locked_until"])
     after = _sub_snapshot(org)
-    if org.sub_end and org.sub_end < platform_today():
+    from backend.services.org_live import off_reason
+    if off_reason(org) == "lapsed":     # past its grace (owner decision 7): sign everyone out now
         await _boot_staff(db, org.id)
     await admin_log.write(db, admin=ctx.admin, action="edit_subscription", org_id=org.id, before=before, after=after,
                           reason=data.reason, ip=ctx.ip)
