@@ -522,12 +522,40 @@ async def test_b8_new_orgs_always_get_a_token(db):
 
 
 @pytest.mark.asyncio
-async def test_b8_rate_limited_per_org(client, tenant):
+async def test_b8_junk_is_limited_per_sender_and_cannot_use_up_the_shops_limit(client, tenant, monkeypatch):
+    """SEC-07: posts with a wrong token count against the sender's IP, never against the shop, so
+    someone who knows a shop's org id can't get its genuine SMS, chat and call events refused."""
+    from backend.core import webhook_security as ws
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOPS", 1)
     org = await _org_id(client, tenant)
+    tok = await _token(client, tenant)
     body = {"channel": "sms", "handle": "+1", "body": "x"}
-    codes = [(await client.post(f"/api/inbox/webhook/{org}", json=body, headers={"X-Webhook-Token": "bad"})).status_code
-             for _ in range(121)]
-    assert codes[:120] == [401] * 120 and codes[120] == 429
+    junk = {"X-Webhook-Token": "bad", "X-Forwarded-For": "203.0.113.9"}
+    n = ws.INBOUND_BAD_TOKEN_LIMIT_PER_MIN
+    codes = [(await client.post(f"/api/inbox/webhook/{org}", json=body, headers=junk)).status_code
+             for _ in range(n + 1)]
+    assert codes[:n] == [401] * n and codes[n] == 429                       # the junk sender is cut off
+    for _ in range(ws.INBOUND_TOKEN_LIMIT_PER_MIN // 2):                    # ...and keeps trying
+        await client.post(f"/api/inbox/webhook/{org}", json=body, headers=junk)
+    real = await client.post(f"/api/inbox/webhook/{org}", json=body,
+                             headers={"X-Webhook-Token": tok, "X-Forwarded-For": "198.51.100.7"})
+    assert real.status_code == 201, "the provider's genuine event still gets through"
+    call = await client.post(f"/api/comms/calls/webhook?org_id={org}", json={
+        "provider": "x", "direction": "inbound", "from_number": "+1", "to_number": "+2", "status": "completed"},
+        headers={"X-Webhook-Token": tok, "X-Forwarded-For": "198.51.100.7"})
+    assert call.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_b8_verified_posts_still_have_a_per_shop_cap(client, tenant, monkeypatch):
+    from backend.core import webhook_security as ws
+    monkeypatch.setattr(ws, "INBOUND_TOKEN_LIMIT_PER_MIN", 3)
+    org = await _org_id(client, tenant)
+    tok = await _token(client, tenant)
+    body = {"channel": "sms", "handle": "+1", "body": "x"}
+    codes = [(await client.post(f"/api/inbox/webhook/{org}", json=body, headers={"X-Webhook-Token": tok})).status_code
+             for _ in range(4)]
+    assert codes == [201, 201, 201, 429]
 
 
 # ── B9: calls webhook ────────────────────────────────────────────────────────────────────────

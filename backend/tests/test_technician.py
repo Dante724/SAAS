@@ -106,7 +106,7 @@ async def test_assignment_creates_notification_for_other_tech(client, tenant, db
 async def test_push_subscribe_unsubscribe(client, tenant):
     key = (await client.get("/api/push/vapid-public-key", headers=tenant)).json()
     assert "enabled" in key and key["enabled"] is False   # no VAPID configured in test
-    sub = {"endpoint": "https://push.example/abc", "keys": {"p256dh": "k", "auth": "a"},
+    sub = {"endpoint": "https://fcm.googleapis.com/fcm/send/abc", "keys": {"p256dh": "k", "auth": "a"},
            "user_agent": "pytest"}
     r = await client.post("/api/push/subscribe", json=sub, headers=tenant)
     assert r.status_code == 201 and r.json()["ok"]

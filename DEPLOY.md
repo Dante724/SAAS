@@ -140,15 +140,29 @@ Some migrations hold heavy locks for as long as they run. `MIGRATION_LOCK_TIMEOU
 how long they *wait* for a lock; once a migration holds one, the app's queries on that table queue
 behind it until it commits. Time each one on a restored copy of production first (section 4).
 
+Each migration commits on its own (`transaction_per_migration` in `backend/migrations/env.py`), so
+a migration's locks are released when *that migration* ends, never carried into the next one.
+Before this (final review P2-1), one `alembic upgrade` ran every pending migration in a single
+transaction: the locks w2b01, dec08 and corg02 took stayed held through dbi01's read-only
+preflight (49 tables, organisations and employees among them, so sign-in waited too), and
+order_lines stayed locked from w4i01 through w4s01's preflight. The windows below are now each
+migration's own. To keep the window short on a database still behind dec08, upgrade in two steps:
+`alembic upgrade dec08` inside the window, then `alembic upgrade head` with the app running.
+
+If a migration fails, only that migration is rolled back; the ones before it stay applied and
+`alembic current` shows where it stopped. Fix the cause and rerun `alembic upgrade head`: it
+resumes from there. The same holds for `alembic downgrade`: a failed downgrade leaves the
+revisions it already walked back undone, it is not all-or-nothing.
+
 | Migration | What is locked, and for how long | Window? |
 |---|---|---|
 | corg01 (#219) | One table at a time, briefly: adding the column is instant, the backfill commits every 5000 rows, the NOT NULL check is validated without blocking writes, indexes build `CONCURRENTLY`. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
-| w2b01 (#221) | One transaction: the data repairs, then the CHECKs (ACCESS EXCLUSIVE on stock_levels, invoices, time_entries, stock_transfers, gift_cards, coupons, purchase_returns, write_offs, postings, memberships, each for a full scan) and the unique indexes (SHARE on cash_shifts, time_entries, memberships, sales, stock_transfers, write_offs, purchase_returns, postings, coupons, gift_cards: reads go on, writes wait). All held until the end. | Yes at scale: the till (sales, stock, invoices) can't write meanwhile. Seconds at today's sizes. |
+| w2b01 (#221) | One transaction (its own): the data repairs, then the CHECKs (ACCESS EXCLUSIVE on stock_levels, invoices, time_entries, stock_transfers, gift_cards, coupons, purchase_returns, write_offs, postings, memberships, each for a full scan) and the unique indexes (SHARE on cash_shifts, time_entries, memberships, sales, stock_transfers, write_offs, purchase_returns, postings, coupons, gift_cards: reads go on, writes wait). All held until w2b01 commits. | Yes at scale: the till (sales, stock, invoices) can't write meanwhile. Seconds at today's sizes. |
 | dbi01 | One short step at a time, each committed on its own: devices/purchase_orders backfilled 5000 rows per batch and made NOT NULL through a CHECK added NOT VALID and VALIDATEd; 32 indexes built and 46 dropped `CONCURRENTLY`; 58 foreign keys added `NOT VALID` (a SHARE ROW EXCLUSIVE lock on the table and its parent for milliseconds, no scan: writes on those two wait that long) and then VALIDATEd (reads and writes go on). The two cascade swaps (credit_note_lines, serial_events) are one ALTER each (drop + add NOT VALID), then VALIDATE. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
 | dbi02 | Three nullable columns on orders and one on organisations (instant), tokens hashed 2000 orders per batch (row locks only), one unique index built `CONCURRENTLY`. | No. |
 | dbi03 | order_lines.created_at added and given a default (both catalog-only, instant), then existing lines stamped 1000 jobs per batch, each batch its own transaction (row locks only). | No. |
 | w4s01 | One short step at a time, each committed on its own: five columns added (catalog-only: nullable or a constant default), triggers created, repairs and backfills 5000 rows per statement walking the primary key (row locks only), 11 CHECKs added `NOT VALID` (a brief ACCESS EXCLUSIVE lock, no scan) then VALIDATEd (reads and writes go on), three partial unique indexes built `CONCURRENTLY`. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
-| dec08 (#222) | One transaction: 30 tables rewritten, one ALTER each (organisations, orders, order_lines, transactions, stock_movements, stock_levels, sale_lines, invoice_lines are the busy ones), all ACCESS EXCLUSIVE (no reads or writes) until the end. Peak extra disk: about one copy of each table. | **Yes.** Stop the app (or show maintenance) while it runs. |
+| dec08 (#222) | One transaction (its own; the locks go when dec08 commits, before corg02 and dbi01 start): 30 tables rewritten, one ALTER each (organisations, orders, order_lines, transactions, stock_movements, stock_levels, sale_lines, invoice_lines are the busy ones), all ACCESS EXCLUSIVE (no reads or writes) until the end. Peak extra disk: about one copy of each table. | **Yes.** Stop the app (or show maintenance) while it runs. |
 
 w2b01, dec08, dbi01 and w4s01 check the data first and stop with counts (nothing changed) on what they
 can't repair: w2b01 on unknown status values, dec08 on values NUMERIC can't hold (out of range,

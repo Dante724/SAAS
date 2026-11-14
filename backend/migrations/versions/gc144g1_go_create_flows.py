@@ -56,6 +56,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_idempotency_records_created_at", table_name="idempotency_records")
-    op.drop_index("ix_idempotency_records_org_id", table_name="idempotency_records")
+    # idem01 (the other line) creates and drops the same table: on `downgrade base` whichever of
+    # the two runs second finds it already gone (final review P3-1: that used to fail mid-way).
+    if not sa.inspect(op.get_bind()).has_table("idempotency_records"):
+        return
+    op.execute("DROP INDEX IF EXISTS ix_idempotency_records_created_at")
+    op.execute("DROP INDEX IF EXISTS ix_idempotency_records_org_id")
     op.drop_table("idempotency_records")

@@ -61,3 +61,5 @@ def downgrade() -> None:
     op.drop_index("ix_order_statuses_org_id", table_name="order_statuses")
     with op.batch_alter_table("order_statuses") as b:
         b.drop_constraint("uq_order_statuses_org_rt_key", type_="unique")
+    # Back to os144q5's unique index (its downgrade drops it): `downgrade base` used to fail here.
+    op.create_index("uq_order_statuses_org_rt_key", "order_statuses", ["org_id", "record_type", "key"], unique=True)

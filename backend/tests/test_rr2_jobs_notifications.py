@@ -150,12 +150,13 @@ def _real_push(monkeypatch, sent: list):
     fake.webpush = lambda **kw: sent.append(kw)
     monkeypatch.setitem(sys.modules, "pywebpush", fake)
     monkeypatch.setattr(push, "push_enabled", lambda: True)
+    monkeypatch.setattr("backend.services.push._endpoint_is_public", lambda url: True)   # no DNS in tests
 
 
 async def _subscribed(client, tenant, db):
     from backend.models import PushSubscription
     me = await _me(client, tenant)
-    db.add(PushSubscription(org_id=me["org_id"], employee_id=me["id"], endpoint="https://push.invalid/p",
+    db.add(PushSubscription(org_id=me["org_id"], employee_id=me["id"], endpoint="https://fcm.googleapis.com/fcm/send/p",
                             p256dh="k", auth="a"))
     await db.commit()
     return me["org_id"], me["id"]

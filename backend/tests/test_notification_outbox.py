@@ -423,7 +423,7 @@ async def test_staff_push_goes_out_after_the_status_change_commits(client, tenan
     tech = Employee(org_id=org, name="Tech", email="tech-push@test.dev", password_hash="x", active=True)
     db.add(tech)
     await db.flush()
-    db.add(PushSubscription(org_id=org, employee_id=tech.id, endpoint="https://push.example/x",
+    db.add(PushSubscription(org_id=org, employee_id=tech.id, endpoint="https://fcm.googleapis.com/fcm/send/x",
                             p256dh="k", auth="a"))
     o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
     o.assigned_to_id = tech_id = tech.id
@@ -431,6 +431,7 @@ async def test_staff_push_goes_out_after_the_status_change_commits(client, tenan
                             channel="push", active=True))
     await db.commit()
     monkeypatch.setattr(settings, "VAPID_PRIVATE_KEY", "priv", raising=False)
+    monkeypatch.setattr("backend.services.push._endpoint_is_public", lambda url: True)   # no DNS in tests
     monkeypatch.setattr(settings, "VAPID_PUBLIC_KEY", "pub", raising=False)
     pushed = []
     fake = types.ModuleType("pywebpush")

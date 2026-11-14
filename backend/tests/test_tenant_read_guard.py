@@ -283,7 +283,7 @@ async def test_resubscribing_a_browser_moves_it_to_the_new_shop(client, db, two_
     B's notifications stop going to that browser (it used to stay B's, plus a duplicate for A)."""
     from backend.models import PushSubscription
     A, B = two_shops
-    body = {"endpoint": "https://push.example/ep-1", "keys": {"p256dh": "k", "auth": "a"}}
+    body = {"endpoint": "https://fcm.googleapis.com/fcm/send/ep-1", "keys": {"p256dh": "k", "auth": "a"}}
     assert (await client.post("/api/push/subscribe", json=body, headers=B["h"])).status_code == 201
     r = await client.post("/api/push/subscribe", json=body, headers=A["h"])
     assert r.status_code == 201, r.text

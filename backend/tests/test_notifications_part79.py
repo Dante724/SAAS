@@ -151,12 +151,13 @@ async def test_real_push_send_invokes_webpush(client, tenant, db, monkeypatch):
 
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     db.add(PushSubscription(org_id=me["org_id"], employee_id=me["id"],
-                            endpoint="https://push.example/ep1", p256dh="pk", auth="ak"))
+                            endpoint="https://fcm.googleapis.com/fcm/send/ep1", p256dh="pk", auth="ak"))
     await db.commit()
 
     # Configure VAPID so push_enabled() flips true, and capture the transport call.
     monkeypatch.setattr(settings, "VAPID_PUBLIC_KEY", "test-pub")
     monkeypatch.setattr(settings, "VAPID_PRIVATE_KEY", "test-priv")
+    monkeypatch.setattr("backend.services.push._endpoint_is_public", lambda url: True)   # no DNS in tests
     calls = []
     monkeypatch.setattr(pywebpush, "webpush", lambda **kw: calls.append(kw))
 
@@ -165,7 +166,7 @@ async def test_real_push_send_invokes_webpush(client, tenant, db, monkeypatch):
 
     assert len(calls) == 1
     kw = calls[0]
-    assert kw["subscription_info"]["endpoint"] == "https://push.example/ep1"
+    assert kw["subscription_info"]["endpoint"] == "https://fcm.googleapis.com/fcm/send/ep1"
     assert kw["subscription_info"]["keys"] == {"p256dh": "pk", "auth": "ak"}
     assert kw["vapid_private_key"] == "test-priv"
     assert '"title": "Real push"' in kw["data"]
@@ -182,10 +183,11 @@ async def test_push_prunes_dead_subscription(client, tenant, db, monkeypatch):
 
     me = (await client.get("/api/auth/me", headers=tenant)).json()
     db.add(PushSubscription(org_id=me["org_id"], employee_id=me["id"],
-                            endpoint="https://push.example/dead", p256dh="pk", auth="ak"))
+                            endpoint="https://fcm.googleapis.com/fcm/send/dead", p256dh="pk", auth="ak"))
     await db.commit()
     monkeypatch.setattr(settings, "VAPID_PUBLIC_KEY", "test-pub")
     monkeypatch.setattr(settings, "VAPID_PRIVATE_KEY", "test-priv")
+    monkeypatch.setattr("backend.services.push._endpoint_is_public", lambda url: True)   # no DNS in tests
 
     class Gone(Exception):
         response = type("R", (), {"status_code": 410})()
@@ -196,7 +198,7 @@ async def test_push_prunes_dead_subscription(client, tenant, db, monkeypatch):
 
     await notify(db, org_id=me["org_id"], employee_id=me["id"], kind="job.assigned", title="x")
     left = (await db.execute(select(PushSubscription).where(
-        PushSubscription.endpoint == "https://push.example/dead"))).scalar_one_or_none()
+        PushSubscription.endpoint == "https://fcm.googleapis.com/fcm/send/dead"))).scalar_one_or_none()
     assert left is None   # 410 Gone -> pruned
 
 

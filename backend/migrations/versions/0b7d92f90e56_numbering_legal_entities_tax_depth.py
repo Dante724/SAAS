@@ -111,7 +111,8 @@ def downgrade() -> None:
         batch_op.drop_column('code')
 
     with op.batch_alter_table('invoices', schema=None) as batch_op:
-        batch_op.drop_constraint(None, type_='foreignkey')
+        # upgrade() created it unnamed, so the naming convention named it (`downgrade base` failed here)
+        batch_op.drop_constraint('fk_invoices_legal_entity_id_legal_entities', type_='foreignkey')
         batch_op.drop_column('legal_entity_id')
 
     with op.batch_alter_table('tax_rules', schema=None) as batch_op:

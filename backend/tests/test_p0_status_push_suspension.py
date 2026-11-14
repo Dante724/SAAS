@@ -106,6 +106,7 @@ def _real_push(monkeypatch, sent: list):
     fake.webpush = lambda **kw: sent.append(kw)
     monkeypatch.setitem(sys.modules, "pywebpush", fake)
     monkeypatch.setattr(push, "push_enabled", lambda: True)
+    monkeypatch.setattr("backend.services.push._endpoint_is_public", lambda url: True)   # no DNS in tests
 
 
 async def test_ntf01_real_push_with_commit_false_never_commits_the_callers_work(client, tenant, db, monkeypatch):
@@ -113,7 +114,7 @@ async def test_ntf01_real_push_with_commit_false_never_commits_the_callers_work(
     from backend.services import push
     me = await _me(client, tenant)
     org_id, emp_id = me["org_id"], me["id"]
-    db.add(PushSubscription(org_id=org_id, employee_id=emp_id, endpoint="https://push.invalid/x",
+    db.add(PushSubscription(org_id=org_id, employee_id=emp_id, endpoint="https://fcm.googleapis.com/fcm/send/x",
                             p256dh="k", auth="a"))
     await db.commit()
     sent: list = []
@@ -137,7 +138,7 @@ async def test_ntf01_committing_callers_still_save_the_bell_and_touch_the_device
     from backend.services import push
     me = await _me(client, tenant)
     org_id, emp_id = me["org_id"], me["id"]
-    sub = PushSubscription(org_id=org_id, employee_id=emp_id, endpoint="https://push.invalid/y",
+    sub = PushSubscription(org_id=org_id, employee_id=emp_id, endpoint="https://fcm.googleapis.com/fcm/send/y",
                            p256dh="k", auth="a")
     db.add(sub)
     await db.commit()

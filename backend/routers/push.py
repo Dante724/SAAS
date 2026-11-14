@@ -3,7 +3,7 @@
 import hmac
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,9 +22,20 @@ class SubKeys(BaseModel):
 
 
 class SubIn(BaseModel):
-    endpoint: str
+    endpoint: str = Field(max_length=2048)
     keys: SubKeys
     user_agent: str | None = None
+
+    @field_validator("endpoint")
+    @classmethod
+    def _push_service_only(cls, v: str) -> str:
+        # SEC-08: the server POSTs to this URL on every notification, so only real Web Push
+        # services (FCM, Mozilla, Apple, Windows) over https are accepted.
+        from backend.services.push import endpoint_problem
+        problem = endpoint_problem(v)
+        if problem:
+            raise ValueError(problem)
+        return v.strip()
 
 
 @router.get("/vapid-public-key")
