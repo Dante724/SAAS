@@ -184,10 +184,13 @@ async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: Async
     # A key stops with the person who made it: deactivating a teammate also cuts off the
     # integrations they set up (a new key can be made by someone still on the team). A key with no
     # recorded creator has nobody to check, so it is refused too (aul3 gave old ones to the owner).
+    # SEC-09 (final review): and it never does more than its creator may do NOW. A key acts
+    # shop-wide, so it works only while its creator could still make it (key managers whose role
+    # sees the whole shop); narrowing their role pauses it, restoring the role resumes it.
     from backend.models import Employee
-    creator_active = row.created_by_id and (await db.execute(select(Employee.active).where(
-        Employee.id == row.created_by_id))).scalar_one_or_none()
-    if not creator_active:
+    creator = (await db.execute(select(Employee).where(
+        Employee.id == row.created_by_id))).scalar_one_or_none() if row.created_by_id else None
+    if creator is None or not creator.active or await creator_key_block(db, creator):
         raise HTTPException(401, "This API key's creator no longer has access. Create a new key.",
                             headers={"WWW-Authenticate": "Bearer"})
     # A suspended or lapsed shop's integrations stop with it (keys used to keep working).
@@ -201,7 +204,53 @@ async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: Async
     # Same flush-time shop guard as signed-in staff (db/tenancy.py): an API write can't touch
     # or point at another shop's rows.
     db.sync_session.info["tenant_org"] = row.org_id
-    return row, ApiPrincipal(org_id=row.org_id, key_id=row.id, scopes=parse_scopes(row.scopes))
+    scopes = await creator_key_scopes(db, creator, parse_scopes(row.scopes))
+    return row, ApiPrincipal(org_id=row.org_id, key_id=row.id, scopes=scopes)
+
+
+KEY_MANAGER_PERM = "can_manage_settings"
+
+
+def role_is_shop_wide(role) -> bool:
+    """No data limits at all: every location, every record, every warehouse and cashbox, no
+    hidden statuses. ("selected" with no locations picked counts as limited.) Payroll scope is
+    not compared: no API key surface reads payroll."""
+    if role is None:
+        return False
+    if any((getattr(role, f, None) or "all") != "all"
+           for f in ("location_scope", "order_scope", "contact_scope", "warehouse_scope")):
+        return False
+    return not (getattr(role, "account_ids", None) or getattr(role, "hidden_status_keys", None))
+
+
+async def creator_key_block(db: AsyncSession, emp) -> Optional[str]:
+    """Why this person may not hold (make, or keep using) an API key, or None if they may.
+    SEC-09: a key acts on the whole shop, so only the owner or a key manager whose role sees the
+    whole shop can stand behind one."""
+    from backend.models import Role
+    from backend.services.auth import is_shop_owner
+    from backend.services.permissions import role_allows
+    if await is_shop_owner(db, emp):
+        return None
+    role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none() \
+        if emp.role_id else None
+    if role is None or not role_allows(role, KEY_MANAGER_PERM):
+        return "Only someone who manages settings can make API keys"
+    if not role_is_shop_wide(role):
+        return ("An API key works on the whole shop, so it can only be made by the owner or someone "
+                "whose role isn't limited to some locations, records, warehouses, cashboxes or statuses")
+    return None
+
+
+async def creator_key_scopes(db: AsyncSession, emp, scopes: set) -> set:
+    """The key's scopes, capped by what its creator may see now: costs:read needs the creator to
+    still see purchase prices."""
+    if "costs:read" in scopes:
+        from backend.services.auth import has_perm
+        from backend.services.redact import COST_PERM
+        if not await has_perm(db, emp, COST_PERM):
+            scopes = set(scopes) - {"costs:read"}
+    return scopes
 
 
 def key_rate_limit(row: ApiKey) -> int:

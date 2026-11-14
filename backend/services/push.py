@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,46 @@ VALID_KINDS = {
     "task.assigned", "task.changed", "task.completed",   # tasks phase 0: tasks reach the bell
     "task.overdue",                                      # tk02: the overdue sweep
 }
+
+
+# SEC-08 (final review): the only places a push subscription's endpoint may point. A browser hands
+# its subscription to the server, so without this any staff member could register a metadata or
+# internal URL and have the server POST to it on every notification (blind SSRF).
+PUSH_SERVICE_HOSTS = frozenset({
+    "fcm.googleapis.com", "android.googleapis.com",       # Chrome, Edge on Android, Opera, Samsung
+    "updates.push.services.mozilla.com",                  # Firefox (autopush)
+    "web.push.apple.com",                                 # Safari, iOS home-screen apps
+})
+PUSH_SERVICE_SUFFIXES = (".push.services.mozilla.com", ".push.apple.com",
+                         ".notify.windows.com")           # Edge on Windows (WNS)
+
+
+def endpoint_problem(url: str) -> Optional[str]:
+    """Why `url` isn't a Web Push endpoint the server will POST to, or None. No DNS here (it runs
+    when a browser subscribes); the address is checked before each send."""
+    try:
+        p = urlparse((url or "").strip())
+        port = p.port
+    except ValueError:
+        return "not a valid URL"
+    if p.scheme != "https":
+        return "push endpoints use https"
+    if p.username or p.password or port not in (None, 443):
+        return "not a Web Push service URL"
+    host = (p.hostname or "").lower().rstrip(".")
+    if not (host in PUSH_SERVICE_HOSTS or host.endswith(PUSH_SERVICE_SUFFIXES)):
+        return "not a known Web Push service"
+    return None
+
+
+def _endpoint_is_public(url: str) -> bool:
+    """The push host resolves only to public addresses (the app's SSRF check). Blocking DNS."""
+    from backend.core import ssrf
+    try:
+        ssrf.public_ip_for(urlparse(url).hostname or "", 443)
+        return True
+    except ssrf.UnsafeURLError:
+        return False
 
 
 def push_enabled() -> bool:
@@ -197,6 +238,14 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict, *, c
         return
     claims = {"sub": f"mailto:{settings.VAPID_CLAIMS_EMAIL}"}
     for s in subs:
+        if endpoint_problem(s.endpoint):
+            # Saved before SEC-08's check: it can never be a push service, so it goes.
+            log.warning("push endpoint is not a Web Push service; subscription removed (employee=%s)", employee_id)
+            await db.delete(s)
+            continue
+        if not await asyncio.to_thread(_endpoint_is_public, s.endpoint):
+            log.warning("push endpoint does not resolve to a public address; not sent (employee=%s)", employee_id)
+            continue
         try:
             # pywebpush is blocking HTTP: run it off the event loop.
             await asyncio.to_thread(

@@ -8,7 +8,7 @@ accept or decline an estimate, which is recorded back into the event feed.
 """
 import hashlib
 import hmac
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -61,7 +61,9 @@ async def _load(db: AsyncSession, token: str, *, action: bool = False) -> Order:
     # SEC-12: compares the token's SHA-256 (services/track_links), never a stored plaintext
     row = await db.execute(select(Order).where(Order.public_token == token))
     order = row.scalar_one_or_none()
-    if not order:
+    # QA-7: a deleted (archived) job is gone for the customer too (it may have been opened on the
+    # wrong customer); restoring it brings the link back.
+    if not order or order.archived:
         raise HTTPException(404, "Order not found")
     from backend.services.track_links import is_expired
     if is_expired(order):
@@ -788,12 +790,103 @@ async def _paid_fields(db: AsyncSession, order: "Order", fx) -> dict:
     total = float(order.total or 0)
     paid = max(0.0, await net_paid(db, order.id))
     due = await balance_due(db, order)          # net of payments, refunds and credit notes
+    return _paid_dict(total, paid, due, fx)
+
+
+def _paid_dict(total: float, paid: float, due: float, fx) -> dict:
     rate = fx or 1
     return {
         "amount_paid": q2(paid * rate),
         "balance_due": q2(due * rate),
         "paid_in_full": total > 0 and due <= 0,
     }
+
+
+_VOID_INVOICE = ("void", "voided", "cancelled", "canceled")
+
+
+async def _paid_fields_many(db: AsyncSession, orders: list, fx_by_id: dict) -> dict:
+    """QA-7: _paid_fields for a page of jobs in a fixed number of queries. Same rule as
+    services/order_money (net_paid, credited, balance_due); test_fr_x1_access checks they agree."""
+    from sqlalchemy import func as _f, or_ as _or
+    from backend.models import Invoice, InvoiceOrder, Payment
+    if not orders:
+        return {}
+    ids = [o.id for o in orders]
+    by_kind: dict = {}
+    for oid, kind, amt in (await db.execute(
+            select(Payment.order_id, Payment.kind, _f.coalesce(_f.sum(Payment.amount), 0))
+            .where(Payment.order_id.in_(ids)).group_by(Payment.order_id, Payment.kind))).all():
+        by_kind.setdefault(oid, {})[kind] = float(amt or 0)
+    # Credit notes: every non-void invoice with credit that bills one of these jobs, directly or
+    # through the link table, shared by order total when it bills several.
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id.in_(ids))
+    invs = (await db.execute(select(Invoice.id, Invoice.order_id, Invoice.credited).where(
+        _or(Invoice.order_id.in_(ids), Invoice.id.in_(linked)), Invoice.credited > 0,
+        Invoice.status.notin_(_VOID_INVOICE)))).all()
+    billed: dict = {iid: ({primary} if primary else set()) for iid, primary, _c in invs}
+    if invs:
+        for iid, oid in (await db.execute(select(InvoiceOrder.invoice_id, InvoiceOrder.order_id).where(
+                InvoiceOrder.invoice_id.in_(list(billed))))).all():
+            billed[iid].add(oid)
+    shared = {oid for oids in billed.values() if len(oids) > 1 for oid in oids}
+    totals = dict((await db.execute(select(Order.id, Order.total).where(Order.id.in_(shared)))).all()) if shared else {}
+    credit: dict = {}
+    for iid, _primary, cred in invs:
+        oids = billed[iid]
+        whole = sum(float(totals.get(o) or 0) for o in oids) if len(oids) > 1 else 0
+        for oid in oids:
+            if len(oids) <= 1:
+                share = 1.0
+            else:
+                share = float(totals.get(oid) or 0) / whole if whole else 1 / len(oids)
+            credit[oid] = credit.get(oid, 0.0) + float(cred or 0) * share
+    out = {}
+    for o in orders:
+        k = by_kind.get(o.id, {})
+        net = q2(q2(k.get("payment", 0.0) + k.get("prepayment", 0.0)) - q2(abs(k.get("refund", 0.0))))
+        due = q2(max(0.0, float(o.total or 0) - float(getattr(o, "written_off", 0) or 0)
+                     - net - q2(credit.get(o.id, 0.0))))
+        out[o.id] = _paid_dict(float(o.total or 0), max(0.0, net), due, fx_by_id.get(o.id))
+    return out
+
+
+async def _can_sign_many(db: AsyncSession, org, orders: list, statuses: dict) -> dict:
+    """QA-7: _can_sign for a page of jobs without per-job queries. `statuses` maps
+    (record_type, key) to the shop's OrderStatus row."""
+    if not orders or org is None:
+        return {o.id: False for o in orders}
+    decided = set((await db.execute(select(
+        DocumentSignature.order_id, DocumentSignature.doc_type, DocumentSignature.revision).where(
+        DocumentSignature.order_id.in_([o.id for o in orders])))).all())
+    today_at: dict = {}
+    out = {}
+    for o in orders:
+        doc_type = "estimate" if o.is_estimate else "work_order"
+        if (o.id, doc_type, _revision(o)) in decided:
+            out[o.id] = False
+            continue
+        vu = getattr(o, "estimate_valid_until", None)
+        if o.is_estimate and vu:
+            if o.location_id not in today_at:
+                today_at[o.location_id] = await shop_today(db, o.org_id, o.location_id)
+            if vu < today_at[o.location_id]:
+                out[o.id] = False
+                continue
+        if o.is_estimate:
+            on, raw = getattr(org, "oe_allow_approval", True), getattr(org, "oe_approval_statuses", "") or ""
+        else:
+            on, raw = getattr(org, "oe_wo_allow_approval", False), getattr(org, "oe_wo_approval_statuses", "") or ""
+        if not on:
+            out[o.id] = False
+            continue
+        allowed = [s.strip() for s in raw.split(",") if s.strip()]
+        if allowed:
+            out[o.id] = o.status in allowed
+        else:
+            st = statuses.get((doc_type, o.status))
+            out[o.id] = not (st and (st.is_terminal or st.status_group in ("closed", "dropped")))
+    return out
 
 
 async def _client_by_portal(db: AsyncSession, token: str, *, action: bool = False) -> Client:
@@ -826,13 +919,29 @@ def _order_card(o: "Order") -> dict:
     }
 
 
+PORTAL_PAGE_DEFAULT = 50
+PORTAL_PAGE_MAX = 100
+
+
 @router.get("/portal/{token}")
-async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
+async def portal_home(token: str, db: AsyncSession = Depends(get_db),
+                      limit: int = Query(PORTAL_PAGE_DEFAULT, ge=1, le=PORTAL_PAGE_MAX),
+                      skip: int = Query(0, ge=0)):
+    """The customer's jobs and estimates, newest first. QA-7: deleted (archived) jobs are left
+    out, the list is paged (`limit`/`skip`, `has_more`; `counts` are the full totals), and a
+    page costs the same handful of queries however many jobs it holds."""
+    from sqlalchemy import func as _f
     client = await _client_by_portal(db, token)
     org = (await db.execute(select(Organisation).where(Organisation.id == client.org_id))).scalar_one_or_none()
-    orders = (await db.execute(
-        select(Order).where(Order.client_id == client.id).order_by(desc(Order.created_at))
+    live = (Order.client_id == client.id, Order.archived.is_not(True))
+    rows = (await db.execute(
+        select(Order).where(*live).order_by(desc(Order.created_at), desc(Order.id)).offset(skip).limit(limit + 1)
     )).scalars().all()
+    has_more = len(rows) > limit
+    orders = rows[:limit]
+    totals = {bool(est): (n, w) for est, n, w in (await db.execute(
+        select(Order.is_estimate, _f.count(Order.id), _f.count(Order.warranty_until))
+        .where(*live).group_by(Order.is_estimate))).all()}
 
     # What the job list shows beside each card: the item, the total in the customer's currency,
     # and whether the customer has something to do (approve, or choose recommended work).
@@ -847,31 +956,37 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
             open_recs[oid] = open_recs.get(oid, 0) + 1
     ci = await _cur.resolve_for_client(db, client.org_id, client.id, None)
     # The shop's own status names, as the job page shows them.
-    from backend.models import OrderStatus as _OS
-    names = {(s.record_type, s.key): s.name for s in (await db.execute(
-        select(_OS).where(_OS.org_id == client.org_id))).scalars().all()}
+    statuses: dict = {}
+    for s in (await db.execute(select(OrderStatus).where(OrderStatus.org_id == client.org_id))).scalars().all():
+        statuses.setdefault((s.record_type, s.key), s)
+    # Same currency rule as the job page: the order's own currency wins over the client's
+    # (one lookup per currency, not per job).
+    by_code = {ci["code"]: ci}
+    for code in {o.currency_code for o in orders if o.currency_code} - set(by_code):
+        by_code[code] = await _cur.resolve_for_client(db, client.org_id, client.id, code)
+    cur_of = {o.id: by_code[o.currency_code] if o.currency_code else ci for o in orders}
+    fx = {o.id: o.fx_rate or cur_of[o.id]["rate"] or 1 for o in orders}
+    can_sign = await _can_sign_many(db, org, orders, statuses)
+    paid = await _paid_fields_many(db, orders, fx)
 
-    async def card(o: "Order") -> dict:
+    def card(o: "Order") -> dict:
         c = _order_card(o)
-        c["stage_label"] = STAGE_LABEL.get(o.status) or names.get(
-            ("estimate" if o.is_estimate else "work_order", o.status)) or c["stage_label"]
+        kind = "estimate" if o.is_estimate else "work_order"
+        st = statuses.get((kind, o.status))
+        c["stage_label"] = STAGE_LABEL.get(o.status) or (st.name if st else None) or c["stage_label"]
         d = devices.get(o.device_id)
-        # Same currency rule as the job page: the order's own currency wins over the client's.
-        oci = ci if not o.currency_code or o.currency_code == ci["code"] else \
-            await _cur.resolve_for_client(db, client.org_id, client.id, o.currency_code)
-        fx = o.fx_rate or oci["rate"] or 1
         c.update({
             "device": (" ".join(p for p in [d.brand, d.model] if p) or None) if d else None,
-            "total_converted": q2((o.total or 0) * fx),
-            "currency_symbol": oci["symbol"],
-            "awaiting_approval": await _can_sign(db, o),
-            **(await _paid_fields(db, o, fx)),
+            "total_converted": q2((o.total or 0) * fx[o.id]),
+            "currency_symbol": cur_of[o.id]["symbol"],
+            "awaiting_approval": can_sign[o.id],
+            **paid[o.id],
             "open_recommendations": open_recs.get(o.id, 0),
         })
         return c
 
-    work_orders = [await card(o) for o in orders if not o.is_estimate]
-    estimates = [await card(o) for o in orders if o.is_estimate]
+    work_orders = [card(o) for o in orders if not o.is_estimate]
+    estimates = [card(o) for o in orders if o.is_estimate]
     _show_logo = getattr(org, "page_show_logo", True) or getattr(org, "oe_show_logo", True)
     return {
         "shop_name": org.name if org else "Repair shop",
@@ -881,10 +996,13 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
         "currency_symbol": ci["symbol"],
         "work_orders": work_orders,
         "estimates": estimates,
+        "has_more": has_more,
+        "skip": skip,
+        "limit": limit,
         "counts": {
-            "work_orders": len(work_orders),
-            "estimates": len(estimates),
-            "under_warranty": sum(1 for o in orders if o.warranty_until),
+            "work_orders": totals.get(False, (0, 0))[0],
+            "estimates": totals.get(True, (0, 0))[0],
+            "under_warranty": sum(w for _n, w in totals.values()),
         },
     }
 
@@ -896,7 +1014,7 @@ async def portal_order(token: str, order_id: str, request: Request, db: AsyncSes
     e-invoice) — the portal holder is the job's own customer, who already gets that link."""
     client = await _client_by_portal(db, token)
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.client_id == client.id)
+        select(Order).where(Order.id == order_id, Order.client_id == client.id, Order.archived.is_not(True))
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
@@ -917,7 +1035,7 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
     if data.decision not in ("accept", "decline"):
         raise HTTPException(400, "Invalid decision")
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.client_id == client.id).with_for_update()
+        select(Order).where(Order.id == order_id, Order.client_id == client.id, Order.archived.is_not(True)).with_for_update()
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
@@ -1282,7 +1400,7 @@ async def portal_message(token: str, order_id: str, data: MessageIn, request: Re
     from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
     await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     client = await _client_by_portal(db, token, action=True)
-    order = (await db.execute(select(Order).where(Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.client_id == client.id, Order.archived.is_not(True)))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _post_client_message(db, order, data.body, data.name or client.name)
@@ -1305,7 +1423,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
                              db: AsyncSession = Depends(get_db)):
     client = await _client_by_portal(db, token, action=True)
     order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.client_id == client.id).with_for_update())).scalar_one_or_none()
+        Order.id == order_id, Order.client_id == client.id, Order.archived.is_not(True)).with_for_update())).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     result = await _decide_recommendations(db, order, data, request)
@@ -1324,11 +1442,21 @@ from backend.services.public_name import public_staff_name
 from backend.services.money import q2
 
 
+async def _org_for_slug(db: AsyncSession, slug: Optional[str]) -> Optional[_Org]:
+    """The shop a public link names: its org id, else its subdomain.
+    SEC-01 (final review): the id is tried FIRST. A shop's link is /book/<org id> until it picks a
+    subdomain, and a subdomain set to another shop's id (refused since, staff.change_subdomain,
+    but possibly already saved) used to win and take that shop's page and bookings."""
+    if not slug:
+        return None
+    org = (await db.execute(select(_Org).where(_Org.id == slug))).scalar_one_or_none()
+    if org is None:
+        org = (await db.execute(select(_Org).where(_Org.subdomain == slug.lower()))).scalar_one_or_none()
+    return org
+
+
 async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:
-    # slug matches the org subdomain, else the raw org id (fallback)
-    org = (await db.execute(select(_Org).where(_Org.subdomain == slug))).scalar_one_or_none()
-    if not org:
-        org = (await db.execute(select(_Org).where(_Org.id == slug))).scalar_one_or_none()
+    org = await _org_for_slug(db, slug)
     if not org:
         raise HTTPException(404, "Appointment page not found")
     set_tenant(db, org.id)   # the rest of this request only sees this shop
@@ -1806,11 +1934,11 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
     # matches, so we still never return an order the caller can't prove is theirs.
     # Until the phone pins one shop this may span shops, so it reads columns only (ids, shop ids,
     # phone digits): no other shop's order or client is loaded into the session (tenancy rule).
-    q = select(Order.id, Order.org_id, Order.client_id).where(Order.order_number == num)
+    # QA-7: a deleted (archived) job isn't the customer's to look up any more.
+    q = select(Order.id, Order.org_id, Order.client_id).where(
+        Order.order_number == num, Order.archived == False)  # noqa: E712
     if data.shop:
-        org = (await db.execute(select(_Org).where(_Org.subdomain == data.shop))).scalar_one_or_none()
-        if not org:
-            org = (await db.execute(select(_Org).where(_Org.id == data.shop))).scalar_one_or_none()
+        org = await _org_for_slug(db, data.shop)   # SEC-01: id first, then subdomain
         if not org:
             # same opaque 404 — don't confirm whether the shop/number/phone exists
             raise HTTPException(404, "No matching order — check the number and phone")

@@ -410,7 +410,7 @@ async def test_deactivated_employee_is_not_auto_assigned_or_pushed(client, tenan
     from backend.services import push
     me = await _me(client, tenant)
     ex = await _employee(client, tenant, "Ex Tech")
-    db.add(PushSubscription(org_id=me["org_id"], employee_id=ex, endpoint="https://push.invalid/ex",
+    db.add(PushSubscription(org_id=me["org_id"], employee_id=ex, endpoint="https://fcm.googleapis.com/fcm/send/ex",
                             p256dh="k", auth="a"))
     await db.commit()
     cid = await _client_id(client, tenant)

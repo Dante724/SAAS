@@ -18,6 +18,7 @@ from backend.models import Client, CreditNote, Employee, Invoice
 from backend.services import credit_notes as svc
 from backend.services.auth import assert_perm, record_scope, require_perm
 from backend.services.invoicing import VOID_STATUSES
+from backend.services.money import Qty
 
 router = APIRouter(prefix="/api/finance/credit-notes", tags=["credit-notes"],
                    dependencies=[Depends(record_scope)])
@@ -25,7 +26,7 @@ router = APIRouter(prefix="/api/finance/credit-notes", tags=["credit-notes"],
 
 class CreditNoteLineIn(BaseModel):
     description: str = Field("", max_length=500)
-    qty: float = Field(1, gt=0, le=1_000_000)
+    qty: Qty = Field(1, gt=0, le=1_000_000)     # Qty: rounded to the column's 4 places (schema P2-2)
     unit_price: float = Field(0, ge=0, le=100_000_000)
     tax_rate: float = Field(0, ge=0, le=100)
 
