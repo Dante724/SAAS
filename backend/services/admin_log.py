@@ -36,7 +36,7 @@ def _digest(prev: str | None, row: AdminActionLog) -> str:
 
 
 async def write(db, *, admin: PlatformAdmin | None, action: str, org_id=None, target=None,
-                before=None, after=None, reason=None, outcome="allowed", ip=None) -> AdminActionLog:
+                before=None, after=None, reason=None, outcome="allowed", ip=None, shop_trail=True) -> AdminActionLog:
     if db.bind.dialect.name == "postgresql":   # SQLite already writes one at a time
         await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _LOCK_KEY})
     prev = (await db.execute(select(AdminActionLog.row_hash).order_by(AdminActionLog.id.desc()).limit(1))).scalar()
@@ -48,7 +48,8 @@ async def write(db, *, admin: PlatformAdmin | None, action: str, org_id=None, ta
     row.row_hash = _digest(prev, row)
     db.add(row)
     await db.flush()
-    if outcome == "allowed" and org_id and (before or after):   # declines/cancels change nothing
+    # shop_trail=False: a shop purge (services/shop_purge) deletes the shop's own trail with it.
+    if shop_trail and outcome == "allowed" and org_id and (before or after):   # declines/cancels change nothing
         await _shop_trail(db, org_id=org_id, action=action, target=target, before=before, after=after)
     return row
 

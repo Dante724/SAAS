@@ -34,12 +34,13 @@ from backend.models import (
     PlatformAdmin,
     PlatformCoupon,
 )
-from backend.services import admin_log, crypto, mfa
+from backend.services import admin_log, crypto, mfa, shop_purge
 from backend.services.account_id import normalize as normalize_account_id
 from backend.services.admin_access import (
     ALL_PERMS,
     BUILTIN_ROLES,
     FIELD_GROUPS,
+    OWNER_ONLY_PERMS,
     PERMISSIONS,
     PLANS,
     AdminCtx,
@@ -375,6 +376,11 @@ async def tenant_detail(org_id: str, ctx: AdminCtx = Depends(require_admin_perm(
     row["history"] = [{"action": h.action, "by": h.admin_email, "at": _iso(h.at), "reason": h.reason,
                        **({"before": h.before, "after": h.after} if ctx.is_owner else {})}
                       for h in hist if see_money or h.action not in money]
+    row["offboarded_at"] = _iso(org.offboarded_at)
+    if ctx.can("purge_shops"):   # owner decision 9: whether (and from when) a hard purge is offered
+        st = await shop_purge.status(db, org)
+        row["purge"] = {"eligible": st.eligible, "why_not": st.why_not, "after_days": st.after_days,
+                        "eligible_from": _iso(st.eligible_from), "purged_at": _iso(st.purged_at)}
     return mask(row, org, ctx)
 
 
@@ -626,6 +632,39 @@ async def unsuspend(org_id: str, data: UnsuspendIn, ctx: AdminCtx = Depends(requ
                           after={"sub_status": data.status}, reason=data.reason, ip=ctx.ip)
     await db.commit()
     return {"ok": True}
+
+
+# ── Hard purge of an offboarded shop (owner decision 9, services/shop_purge) ──────────────────
+# Owner role only (purge_shops is an owner-only permission), never on a schedule. GET is the dry
+# run; POST deletes, after the waiting period and with the shop's exact name typed.
+class PurgeIn(BaseModel):
+    confirm_name: str = Field(max_length=200)
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@private.get("/tenants/{org_id}/purge")
+async def purge_preview(org_id: str, ctx: AdminCtx = Depends(require_admin_perm("purge_shops")),
+                        db: AsyncSession = Depends(get_db)):
+    """Dry run: rows per table and files a purge would delete. Changes nothing."""
+    org = await get_shop(db, ctx, org_id)
+    return await shop_purge.preview(db, org)
+
+
+@private.post("/tenants/{org_id}/purge")
+async def purge_shop(org_id: str, data: PurgeIn, ctx: AdminCtx = Depends(require_admin_perm("purge_shops")),
+                     db: AsyncSession = Depends(get_db)):
+    org = await get_shop(db, ctx, org_id)
+    try:
+        out = await shop_purge.purge(db, org, admin=ctx.admin, confirm_name=data.confirm_name,
+                                     reason=data.reason, ip=ctx.ip)
+    except shop_purge.PurgeRefused as e:
+        await admin_log.refuse(db, admin=ctx.admin, action=shop_purge.ACTION, org_id=org_id, ip=ctx.ip,
+                               reason=data.reason, detail=e.detail, status=e.status)
+    except Exception:
+        await db.rollback()
+        raise
+    await db.commit()
+    return out
 
 
 class NoteIn(BaseModel):
@@ -1041,7 +1080,8 @@ class RoleIn(BaseModel):
 
 
 def _clean_role(data: RoleIn) -> dict:
-    perms = {k: True for k, v in (data.permissions or {}).items() if v and k in ALL_PERMS}
+    perms = {k: True for k, v in (data.permissions or {}).items()
+             if v and k in ALL_PERMS and k not in OWNER_ONLY_PERMS}
     levels = {g: lv for g, lv in (data.field_levels or {}).items() if g in FIELD_GROUPS and lv in ("hidden", "own", "shown")}
     sc = data.scope or {}
     scope = {}

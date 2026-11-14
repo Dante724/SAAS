@@ -296,6 +296,16 @@ Enable bucket versioning and keep the bucket private (the app streams files thro
 
 `backend/services/offboarding.offboard_org` exports every row the shop owns (secrets left out) and
 then switches it off: the shop is inactive with `offboarded_at` set, its staff are deactivated and
-signed out, and its API keys stop working. Nothing is deleted: there is no hard purge, because
-payments and invoices must usually be kept for years. If and when offboarded shops are purged is an
-owner/legal decision still to be made. The docstring shows how to run it.
+signed out, and its API keys stop working. Offboarding deletes nothing. The docstring shows how to run it.
+
+**Hard purge (owner decision 9).** Once a shop has been offboarded for `SHOP_PURGE_AFTER_DAYS` days
+(default 30, at most 90: a higher value is treated as 90), a platform admin with the owner role can
+delete its data for good from `/admin` → the shop → "Delete this shop's data for good". A dry run lists
+the rows per table and the stored files first; the purge needs the shop's exact name typed and a
+reason, and is written to the action log. It deletes every row the shop owns in every table, and its
+media objects (local or S3; an object another shop's file still uses is kept). The shop's
+`organisations` row stays as a scrubbed tombstone ("Purged shop", contact details and settings
+cleared) because the append-only action log still points at it. If any other shop's row points at
+the shop's data, the purge refuses and deletes nothing. Nothing purges automatically: there is no
+scheduled job. Export the shop first (offboarding does) if it or its accountant needs the records.
+See `backend/services/shop_purge.py`.

@@ -60,6 +60,16 @@ export type Shop = {
   notes?: { id: string; kind: string; body: string; by: string | null; at: string }[];
   history?: { action: string; by: string | null; at: string; reason: string | null }[];
   jobs_7d?: number; last_activity_at?: string | null;
+  offboarded_at?: string | null;
+  // Owner decision 9: sent only to an admin who may purge (the owner role).
+  purge?: { eligible: boolean; why_not: string | null; after_days: number; eligible_from: string | null; purged_at: string | null };
+};
+
+/** The purge dry run: rows per table and stored files a purge would delete (nothing changes). */
+export type PurgePreview = {
+  eligible: boolean; why_not: string | null; after_days: number; offboarded_at: string | null;
+  eligible_from: string | null; purged_at: string | null; confirm_name: string;
+  counts: Record<string, number>; total: number; media_files: number;
 };
 
 export const SEGMENTS: Record<string, string> = {
@@ -80,7 +90,8 @@ const ACTIONS: Record<string, string> = {
   create_role: "Created a role", edit_role: "Changed a role's access",
   discount: "Gave a discount", discount_removed: "Removed a discount", extend_trial: "Extended a trial", plan_change: "Changed the plan",
   edit_subscription: "Changed billing terms", suspend: "Suspended a shop", unsuspend: "Unsuspended a shop",
-  note: "Added a note", staff_access: "Changed staff access",
+  note: "Added a note", staff_access: "Changed staff access", purge_shop: "Deleted the shop's data for good",
+  purge_shops: "Tried to delete a shop's data",
 };
 export function actionLabel(code: string): string {
   if (ACTIONS[code]) return ACTIONS[code];

@@ -53,7 +53,10 @@ PERMISSIONS = {
         ("approve_requests", "Approve requests"),
     ],
 }
-ALL_PERMS = [c for group in PERMISSIONS.values() for c, _ in group]
+# Owner decision 9: permanently deleting an offboarded shop. Held by the owner role only: it is not
+# in PERMISSIONS (so the role editor never offers it) and _clean_role drops it from any custom role.
+OWNER_ONLY_PERMS = ("purge_shops",)
+ALL_PERMS = [c for group in PERMISSIONS.values() for c, _ in group] + list(OWNER_ONLY_PERMS)
 
 # field group -> the keys it covers in shop responses
 FIELD_GROUPS = {
@@ -165,7 +168,15 @@ def ctx_from(admin: PlatformAdmin, role: AdminRole | None, request: Request | No
     if role is None:   # legacy admin without a role = owner
         spec = BUILTIN_ROLES["owner"]
         return AdminCtx(admin, "owner", dict(spec["permissions"]), dict(spec["field_levels"]), {}, {}, ip, sid)
-    return AdminCtx(admin, role.builtin, dict(role.permissions or {}), dict(role.field_levels or {}),
+    perms = dict(role.permissions or {})
+    if role.builtin == "owner":
+        # The owner role can't be edited and holds everything, including permissions added after
+        # its row was written (its stored list is a snapshot from when it was created).
+        perms = {**perms, **BUILTIN_ROLES["owner"]["permissions"]}
+    else:
+        for code in OWNER_ONLY_PERMS:
+            perms.pop(code, None)
+    return AdminCtx(admin, role.builtin, perms, dict(role.field_levels or {}),
                     dict(role.scope or {}), dict(role.limits or {}), ip, sid)
 
 
