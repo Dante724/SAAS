@@ -255,6 +255,10 @@ class Settings(BaseSettings):
     # Signs /admin session tokens. Unset: derived from SECRET_KEY with a separate label, so a
     # shop token can never verify as an admin token (and vice versa). Set its own value in production.
     PLATFORM_SECRET_KEY: str = ""
+    # Owner decision 9: an offboarded shop can be hard-purged from /admin this many days after
+    # offboarding, never sooner. Clamped to 30..90 (below 30 counts as 30, above 90 as 90) by
+    # services/shop_purge.purge_after_days. Nothing purges on a schedule.
+    SHOP_PURGE_AFTER_DAYS: int = 30
 
     # -- Derived helpers --
     @property

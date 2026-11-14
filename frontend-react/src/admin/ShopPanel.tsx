@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { adminApi, actionLabel, fmtDate, SEGMENTS, type Me, type Shop } from "./api";
+import { adminApi, actionLabel, fmtDate, SEGMENTS, type Me, type PurgePreview, type Shop } from "./api";
 import { loadFailed } from "../lib/notice";
 import Drawer from "../components/Drawer";
 import Button from "../components/Button";
@@ -105,6 +105,8 @@ export default function ShopPanel({ id, me, onClose }: { id: string; me: Me; onC
           ))}
         </section>
       )}
+
+      {s.purge && <PurgeSection shopId={id} purge={s.purge} offboardedAt={s.offboarded_at ?? null} onPurged={load} />}
 
       <section className="border-t border-slate-100 pt-4">
         <h3 className="mb-2 text-sm font-semibold">History</h3>
@@ -251,6 +253,90 @@ function Notes({ shopId, notes, canAdd, onAdded }: { shopId: string; notes: NonN
           <div className="text-2xs text-ink-tertiary">{n.by} · {fmtDate(n.at)}</div>
         </div>
       ))}
+    </section>
+  );
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Owner decision 9: delete an offboarded shop's data for good. Offered only once the shop has been
+ *  offboarded for the waiting period; otherwise it says why. A dry run lists what goes first, and the
+ *  button stays off until the shop's exact name is typed. */
+function PurgeSection({ shopId, purge, offboardedAt, onPurged }: {
+  shopId: string; purge: NonNullable<Shop["purge"]>; offboardedAt: string | null; onPurged: () => void;
+}) {
+  const [preview, setPreview] = useState<PurgePreview | null>(null);
+  const [typed, setTyped] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState("");
+
+  async function check() {
+    setErr(""); setBusy(true);
+    try { setPreview(await adminApi.get<PurgePreview>(`/tenants/${shopId}/purge`)); } catch (e: any) { setErr(e.message); }
+    setBusy(false);
+  }
+  async function purgeNow(e: FormEvent) {
+    e.preventDefault();
+    if (!preview) return;
+    setErr(""); setBusy(true);
+    try {
+      const r = await adminApi.post<{ total: number; media_files: number }>(`/tenants/${shopId}/purge`, { confirm_name: typed, reason });
+      setDone(`Deleted ${plural(r.total, "record")} and ${plural(r.media_files, "file")}.`); setPreview(null); onPurged();
+    } catch (e: any) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  const rows = preview ? Object.entries(preview.counts).sort((a, b) => b[1] - a[1]) : [];
+  return (
+    <section className="space-y-3 rounded-2xl border border-rose-200 bg-rose-50/40 p-4 text-sm" aria-label="Delete this shop's data">
+      <div>
+        <h3 className="text-sm font-semibold text-rose-700">Delete this shop's data for good</h3>
+        <p className="mt-1 text-xs text-ink-secondary">
+          Removes every record and stored file of this shop. It can't be undone. Tekly's billing and admin records about the shop stay, under a blank placeholder.
+        </p>
+      </div>
+      {purge.purged_at ? (
+        <p className="text-xs text-ink-secondary">This shop's data was deleted on {fmtDate(purge.purged_at)}.</p>
+      ) : !purge.eligible ? (
+        <p className="text-xs text-ink-secondary">
+          {purge.why_not}{offboardedAt ? ` Offboarded on ${fmtDate(offboardedAt)}.` : ""}
+        </p>
+      ) : !preview ? (
+        <div className="flex gap-2"><Button size="sm" variant="danger" busy={busy} onClick={check}>Check what would be deleted</Button></div>
+      ) : (
+        <form onSubmit={purgeNow} className="space-y-3">
+          <div className="rounded-xl border border-slate-200 bg-white">
+            <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs">
+              <span className="font-semibold">Dry run</span>
+              <span className="tabular-nums text-ink-tertiary">{plural(preview.total, "record")} · {plural(preview.media_files, "file")}</span>
+            </div>
+            <div className="max-h-48 overflow-auto px-3 py-1.5">
+              {rows.length === 0 && <EmptyState size="inline" title="No records left to delete." />}
+              {rows.map(([table, n]) => (
+                <div key={table} className="flex justify-between gap-3 py-0.5 text-xs">
+                  <span className="font-mono text-ink-secondary">{table}</span><span className="tabular-nums">{n}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {!preview.eligible && <p role="alert" className="text-xs text-rose-600">{preview.why_not}</p>}
+          {preview.eligible && (<>
+            <Field label={`Type the shop's name to confirm: ${preview.confirm_name}`} htmlFor="purge-name">
+              <Input id="purge-name" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />
+            </Field>
+            <Field label="Reason" htmlFor="purge-reason">
+              <Input id="purge-reason" required minLength={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why, for the action log" />
+            </Field>
+            <div className="flex gap-2">
+              <Button type="submit" variant="dangerSolid" busy={busy} disabled={typed !== preview.confirm_name || reason.trim().length < 3}>Delete for good</Button>
+              <Button onClick={() => { setPreview(null); setTyped(""); }}>Cancel</Button>
+            </div>
+          </>)}
+        </form>
+      )}
+      {(err || done) && <p role={err ? "alert" : "status"} className={`text-xs ${err ? "text-rose-600" : "text-emerald-700"}`}>{err || done}</p>}
     </section>
   );
 }

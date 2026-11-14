@@ -13,10 +13,10 @@ rows never cascade (DB-12). This is the one supported way to close a shop:
    shop's API keys (an inactive creator's key is refused). Public pages, sends and background
    jobs already skip a shop that isn't active (services/org_live). One audit_log row records it.
 
-**No hard purge.** Deleting a shop's rows would delete its payments, invoices and stock history,
-which shops must usually keep for years (tax records), and it can't be undone. Whether and when
-Tekly purges offboarded shops is an owner/legal decision; until it is made, offboarding keeps
-the rows, invisible to everyone (no staff can sign in, no public link answers).
+**No hard purge here.** Offboarding keeps the rows, invisible to everyone (no staff can sign in, no
+public link answers). Deleting them for good is a separate, manual step (owner decision 9):
+services/shop_purge, run from /admin by an owner at least SHOP_PURGE_AFTER_DAYS (default 30, clamped to 30..90)
+after offboarding, never on a schedule.
 
 Run it from a shell with the platform console's database access, e.g.::
 

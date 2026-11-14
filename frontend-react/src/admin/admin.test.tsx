@@ -71,3 +71,50 @@ describe("shop panel", () => {
     await screen.findByText(/Sent to the owner for approval/);
   });
 });
+
+describe("purge section", () => {
+  const owner = (): Me => ({ ...me([]), role: { key: "owner", name: "Owner" }, permissions: { purge_shops: true } });
+  const gone = { ...shop, offboarded_at: "2026-09-01T10:00:00",
+    purge: { eligible: true, why_not: null, after_days: 30, eligible_from: "2026-10-01T10:00:00", purged_at: null } };
+
+  it("is not shown to a role that can't purge", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply(shop)));
+    render(<ShopPanel id="s1" me={me(["give_discount"])} onClose={() => {}} />);
+    await screen.findByText("FixIt");
+    expect(screen.queryByText(/Delete this shop's data/)).toBeNull();
+  });
+
+  it("explains why a shop that isn't ready can't be purged, with no button", async () => {
+    const early = { ...gone, purge: { ...gone.purge, eligible: false, why_not: "A shop can be purged 30 days after it was offboarded." } };
+    vi.stubGlobal("fetch", vi.fn(async () => reply(early)));
+    render(<ShopPanel id="s1" me={owner()} onClose={() => {}} />);
+    await screen.findByText(/can be purged 30 days after/);
+    expect(screen.queryByRole("button", { name: "Check what would be deleted" })).toBeNull();
+  });
+
+  it("shows the dry run, and deletes only once the exact name is typed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (url.endsWith("/purge") && init?.method === "POST") return reply({ status: "purged", total: 12, media_files: 1, counts: {} });
+      if (url.endsWith("/purge")) return reply({ eligible: true, why_not: null, after_days: 30, offboarded_at: gone.offboarded_at,
+        eligible_from: null, purged_at: null, confirm_name: "FixIt", counts: { orders: 3, clients: 9 }, total: 12, media_files: 1 });
+      return reply(gone);
+    }));
+    render(<ShopPanel id="s1" me={owner()} onClose={() => {}} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Check what would be deleted" }));
+    await screen.findByText("12 records · 1 file");
+    expect(screen.getByText("clients")).toBeTruthy();
+    expect(calls.some((c) => c.init?.method === "POST")).toBe(false);    // the dry run changes nothing
+    const del = screen.getByRole("button", { name: "Delete for good" }) as HTMLButtonElement;
+    await userEvent.type(screen.getByLabelText("Reason"), "Retention passed");
+    await userEvent.type(screen.getByLabelText(/Type the shop's name/), "fixit");
+    expect(del.disabled).toBe(true);
+    await userEvent.clear(screen.getByLabelText(/Type the shop's name/));
+    await userEvent.type(screen.getByLabelText(/Type the shop's name/), "FixIt");
+    expect(del.disabled).toBe(false);
+    await userEvent.click(del);
+    await screen.findByText("Deleted 12 records and 1 file.");
+    const post = calls.find((c) => c.init?.method === "POST")!;
+    expect(JSON.parse(String(post.init!.body))).toEqual({ confirm_name: "FixIt", reason: "Retention passed" });
+  });
+});
