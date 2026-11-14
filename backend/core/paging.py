@@ -8,6 +8,9 @@ from fastapi import Query
 
 PAGE_MAX = 200
 LIMIT_CEIL = 1000
+# QA-3: an unbounded skip let 10**20 reach SQL (int64 overflow → 500). No list here has ten
+# million rows to page through.
+SKIP_CEIL = 10_000_000
 
 
 def limit_query(default: int = 50):
@@ -15,7 +18,7 @@ def limit_query(default: int = 50):
 
 
 def skip_query():
-    return Query(0, ge=0)
+    return Query(0, ge=0, le=SKIP_CEIL)
 
 
 def clamp(limit: int, cap: int = PAGE_MAX) -> int:
