@@ -74,8 +74,14 @@ class InvoiceIn(BaseModel):
             raise ValueError("The subtotal can't be negative")
         return v
 
+# BE-2: Record payment takes only the methods its screen offers (cash, card, bank transfer, client
+# balance; cashless is the cashbox option of the same name). gift_card, refund and anything else
+# are refused: those values change how the money is counted and refunded.
+_RECORD_METHODS = ("cash", "card", "cashless", "transfer", "balance")
+
+
 class PaymentIn(BaseModel):
-    method: str  # cash|card|transfer|balance|online
+    method: str  # cash|card|cashless|transfer|balance
     amount: float
     reference: Optional[str] = None
     shift_id: Optional[str] = None
@@ -89,6 +95,14 @@ class PaymentIn(BaseModel):
     @classmethod
     def _amount(cls, v):   # audit FIN-11: finite and below the cap (> 0 is a clear 400 below)
         return check_money(v, allow_negative=True)
+
+    @field_validator("method")
+    @classmethod
+    def _method(cls, v):
+        v = (v or "").strip().lower()
+        if v not in _RECORD_METHODS:
+            raise ValueError(f"Payment method must be one of: {', '.join(_RECORD_METHODS)}")
+        return v
 
 
 # Audit FIN-11: a negative opening float or counted cash, or a negative expense (which raised the
@@ -768,14 +782,15 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
     # When the money came in: today by default; an earlier day is a retroactive cash entry.
     paid_at, retro = now_utc(), False
     if data.paid_at:
-        from backend.services.dates import parse_dt
-        day = parse_dt(data.paid_at, "paid_at")
+        # BE-3: a date-only paid_at is that day on the shop's clock, not UTC midnight.
+        from backend.services.dates import parse_money_moment
+        when, day = await parse_money_moment(db, current.org_id, data.paid_at, "paid_at")
         today = await shop_today(db, current.org_id)
-        if day.date() > today:
+        if day > today:
             raise HTTPException(422, "The payment date can't be in the future")
-        if day.date() < today:
+        if day < today:
             await assert_perm(db, current, "can_retroactive_cash")
-            paid_at, retro = day, True
+            paid_at, retro = when, True
     acc = None
     # Audit FIN-04: money that changes hands lands in a cashbox, as on Take payment. A cash
     # payment with no account wrote no till leg, so the invoice showed paid while no drawer or cash
