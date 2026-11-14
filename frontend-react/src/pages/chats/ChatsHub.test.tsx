@@ -52,7 +52,8 @@ describe("ChatsHub status tabs", () => {
     const u = userEvent.setup();
     render(<ChatsHub />);
     const tabs = await screen.findByRole("tablist", { name: "Chat status" });
-    expect(within(tabs).getByRole("tab", { name: /All\s*2/ })).toHaveAttribute("aria-selected", "true");
+    // The tab strip renders before the mocked counts arrive: wait for the counts, don't read them at once.
+    expect(await within(tabs).findByRole("tab", { name: /All\s*2/ })).toHaveAttribute("aria-selected", "true");
     expect(within(tabs).getByRole("tab", { name: /Reply needed\s*1/ })).toBeInTheDocument();
     expect(within(tabs).getByRole("tab", { name: /Spam\s*1/ })).toBeInTheDocument();
     await u.click(within(tabs).getByRole("tab", { name: /Reply needed/ }));
