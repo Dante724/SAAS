@@ -15,6 +15,7 @@ import { useMe } from "../../context/Me";
 import BinScanField, { ScannedBin } from "../../components/BinScanField";
 import { Badge, type BadgeTone } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
+import { fileForUpload } from "../../lib/media";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
@@ -237,12 +238,9 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
 
   async function attachInvoice(file: File) {
     if (!po) return;
-    if (file.size > 6_000_000) { flash("File too large (max ~6 MB)"); return; }
     setBusy(true);
     try {
-      const dataUrl: string = await new Promise((res, rej) => {
-        const r = new FileReader(); r.onload = () => res(r.result as string); r.onerror = rej; r.readAsDataURL(file);
-      });
+      const dataUrl = await fileForUpload(file);   // the shared 10 MB limit (PERF-22)
       await api.post(`/inventory/po/${po.id}/invoice`, { invoice_file: dataUrl, invoice_name: file.name });
       flash("Invoice attached"); load();
     } catch (e: any) { flash(e.message || "Couldn't attach"); } finally { setBusy(false); }

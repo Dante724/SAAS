@@ -5,6 +5,7 @@ import ScanButton from "../components/ScanButton";
 import Button, { buttonClass } from "../components/Button";
 import EmptyState from "../components/EmptyState";
 import PublicLayout, { Field as Float, PublicTitle, accentFill, inputCls, onColor, publicCard, selectCls, shopAccent, textareaCls } from "./PublicLayout";
+import { fileForUpload } from "../lib/media";
 
 // Self check-in (docs/SPEC_self_checkin.md). /c/<token> is a check-in point's QR: the form comes
 // from the server (the shop's industry template, the job types this point offers and the fields
@@ -145,14 +146,9 @@ function SignaturePad({ onChange }: { onChange: (png: string | null) => void }) 
   );
 }
 
-function readPhoto(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result));
-    fr.onerror = () => reject(new Error("Couldn't read that photo"));
-    fr.readAsDataURL(file);
-  });
-}
+// Shrunk on the phone and held to the shared per-file limit (lib/media.ts, PERF-22): a few raw
+// camera photos used to make the check-in too big to send.
+const readPhoto = fileForUpload;
 
 // The template's identity fields: asked up front only when there's no decoded code to fill them.
 const CORE = new Set(["make", "brand", "model", "year"]);

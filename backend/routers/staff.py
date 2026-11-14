@@ -947,6 +947,9 @@ async def update_company(
     if not org:
         raise HTTPException(404, "Company not found")
     payload = data.model_dump(exclude_unset=True)
+    if payload.get("logo_data"):
+        from backend.services.media import check_size
+        check_size(payload["logo_data"])   # PERF-22: the one per-file limit (413)
     if "industry_template" in payload:
         from backend.services import industry as _ind
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)

@@ -196,8 +196,14 @@ class Settings(BaseSettings):
 
     # ── B3: media storage ─────────────────────────────────────────────────
     MEDIA_BACKEND: str = "db"          # db | local | s3  (db = legacy inline; local/s3 = offloaded)
-    MEDIA_MAX_BYTES: int = 8 * 1024 * 1024   # Build 144cq: hard cap on any single upload (8 MB)
-    # Whole request body cap (base64 of an 8 MB upload is ~11 MB of JSON). 0 disables.
+    # PERF-22 (owner decision 4): one limit per file, on every upload path; the frontend shows the
+    # same number (frontend-react/src/lib/media.ts MEDIA_MAX_MB, a test keeps them equal). There is
+    # no per-shop total cap; MEDIA_ALERT_BYTES only tells the platform admins.
+    MEDIA_MAX_BYTES: int = 10 * 1024 * 1024
+    MEDIA_IMAGE_MAX_EDGE: int = 2000     # photos are shrunk to this long side on upload (0 = off)
+    MEDIA_IMAGE_QUALITY: int = 80        # JPEG/WebP quality of a shrunk photo
+    MEDIA_ALERT_BYTES: int = 25 * 1024 ** 3   # a shop past this much stored media alerts /admin once
+    # Whole request body cap (base64 of a 10 MB upload is ~13.4 MB of JSON). 0 disables.
     MAX_REQUEST_BYTES: int = 16 * 1024 * 1024
     MEDIA_LOCAL_DIR: str = "/tmp/repairos-media"
     MEDIA_S3_BUCKET: str = ""

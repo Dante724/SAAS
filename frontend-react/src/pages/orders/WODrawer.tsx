@@ -27,7 +27,7 @@ import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
 import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
-import { readAsDataUrl } from "../../lib/files";
+import { dataUrlMime, fileForUpload } from "../../lib/media";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
 import ClientDrawer from "./ClientDrawer";
@@ -1224,8 +1224,8 @@ function IntakePhotos({ orderId, photos, onChanged, onFlash }: {
     try {
       const ids = list.map((p) => p.id);
       for (const f of Array.from(files)) {
-        const data = await readAsDataUrl(f);
-        const r = await api.post<any>("/media", { data, name: f.name, mime: f.type });
+        const data = await fileForUpload(f);
+        const r = await api.post<any>("/media", { data, name: f.name, mime: dataUrlMime(data, f.type) });
         ids.push(r.id);
       }
       await save(ids); onFlash("Photos added");
@@ -1777,8 +1777,8 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
     try {
       const ids: string[] = [...(item.file_ids || [])];
       for (const f of Array.from(files)) {
-        const data = await readAsDataUrl(f);
-        const r = await api.post<any>("/media", { data, name: f.name, mime: f.type });
+        const data = await fileForUpload(f);
+        const r = await api.post<any>("/media", { data, name: f.name, mime: dataUrlMime(data, f.type) });
         ids.push(r.id);
       }
       await api.patch(`/orders/${orderId}/checklists/${cid}/items/${item.id}`, { file_ids: ids });
@@ -2229,8 +2229,8 @@ export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter
     setBusy(true);
     try {
       for (const f of Array.from(files)) {
-        const data = await readAsDataUrl(f);
-        await api.post(`/feed/order/${orderId}`, { item_type: f.type.startsWith("image/") ? "photo" : "file", media_data: data, media_name: f.name, media_mime: f.type || undefined, body: text.trim() || undefined, visibility: vis });
+        const data = await fileForUpload(f);
+        await api.post(`/feed/order/${orderId}`, { item_type: f.type.startsWith("image/") ? "photo" : "file", media_data: data, media_name: f.name, media_mime: dataUrlMime(data, f.type) || undefined, body: text.trim() || undefined, visibility: vis });
       }
       setText(""); onFlash(files.length === 1 ? "File added" : `${files.length} files added`); load();
     } catch (e: any) { onFlash(e.message || "Upload failed (the file may be too large)", "warn"); }

@@ -154,12 +154,14 @@ export default function Job() {
     const list = Array.from(files).slice(0, 10);
     setUploading(list.length);
     const ids: string[] = [];
+    let why: string | undefined;   // e.g. the 10 MB limit, so a skipped photo isn't a mystery
     for (const f of list) {
-      try { ids.push(await uploadPhoto(await shrinkPhoto(f))); } catch { /* skip a bad one */ }
+      try { ids.push(await uploadPhoto(await shrinkPhoto(f))); } catch (e: any) { why = e?.message; }
       setUploading((n) => Math.max(0, n - 1));
     }
     if (fileRef.current) fileRef.current.value = "";
-    if (!ids.length) { toast({ title: "Photos didn't upload", tone: "error" }); return; }
+    if (!ids.length) { toast({ title: "Photos didn't upload", body: why, tone: "error" }); return; }
+    if (why) toast({ title: `${list.length - ids.length} photo${list.length - ids.length === 1 ? "" : "s"} skipped`, body: why, tone: "warn" });
     try {
       const photos = await addPhotosToJob(order.id, ids, shootLabel.current);
       setOrder((o) => (o ? { ...o, intake_photos: photos } : o));

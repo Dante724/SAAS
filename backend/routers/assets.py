@@ -17,6 +17,7 @@ from backend.models import Client, Device, Employee, Order
 from backend.services import asset_catalog as _cat
 from backend.services import identifiers as _ids
 from backend.services import industry as _ind
+from backend.services import media as _media
 from backend.core import paging as _paging
 from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.services.dates import shop_today
@@ -266,7 +267,7 @@ async def create_asset(
         template_key=template_key, asset_group_id=data.asset_group_id,
         is_generated_serial=generated, color=data.color, condition=data.condition,
         location_id=data.location_id,
-        image_data=data.image_data,
+        image_data=await _media.inline_photo(data.image_data),   # PERF-22: 10 MB, shrunk
         custom_data=data.custom_data or {},
         asset_status=data.asset_status or ("in_use" if data.owner_type == "client" else "in_stock"),
         purchase_price=data.purchase_price or 0.0, sale_price=data.sale_price or 0.0,
@@ -554,6 +555,8 @@ async def update_asset(
         if not owner:
             raise HTTPException(404, "Asset not found")
     payload = data.model_dump(exclude_unset=True)
+    if payload.get("image_data"):
+        payload["image_data"] = await _media.inline_photo(payload["image_data"])   # PERF-22
     if not await has_perm(db, current, "can_see_asset_cost"):
         payload.pop("purchase_price", None)          # a cost they never saw stays as it was
     if payload.get("owner_type") == "client" and not (payload.get("client_id") or d.client_id):

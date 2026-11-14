@@ -128,6 +128,8 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"React build missing ({_react_index}). Build frontend-react before starting "
                            "in production/staging (the Dockerfile does this).")
     await init_db()
+    from backend.services.media import warn_if_unconfigured
+    warn_if_unconfigured()   # PERF-22: a deployed server with no object storage refuses uploads
     # Build 144ce: ensure a bootstrap platform admin exists for the /admin portal.
     try:
         from backend.db.database import AsyncSessionLocal
@@ -181,6 +183,21 @@ async def _unreadable_creds(_request, exc: CredentialsUnreadable):
     # Audit M10: a shop's saved keys that can't be decrypted are refused everywhere (never swapped
     # for the operator's); paths that don't handle it say what to do instead of a 500.
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+from backend.services.media import MediaStoreUnavailable, MediaTooLarge  # noqa: E402
+
+
+@app.exception_handler(MediaTooLarge)
+async def _media_too_large(_request, exc: MediaTooLarge):
+    # PERF-22: every upload path, however it reaches media.store(), answers an over-limit file alike.
+    return JSONResponse(status_code=413, content={"detail": str(exc)})
+
+
+@app.exception_handler(MediaStoreUnavailable)
+async def _media_store_unavailable(_request, exc: MediaStoreUnavailable):
+    # PERF-22: deployed with no object storage. Fail closed; never keep the bytes in the database.
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 app.add_middleware(CostRedactionMiddleware)

@@ -11,6 +11,7 @@ from typing import Optional
 from sqlalchemy import (
     DDL,
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -3845,6 +3846,22 @@ class MediaBlob(OrgScoped, Base):
     name: Mapped[Optional[str]] = mapped_column(String(300))
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class MediaUsageAlert(OrgScoped, Base):
+    """PERF-22: a shop's stored media went past MEDIA_ALERT_BYTES. Platform admins only (shown in
+    /admin and /metrics); shops never see it and nothing is blocked. One open row per shop
+    (cleared_at IS NULL): the sweep opens it on the crossing and closes it when the shop drops back
+    below, so the next crossing alerts again and a shop that stays over alerts once."""
+    __tablename__ = "media_usage_alerts"
+    __table_args__ = (Index("uq_media_usage_alerts_open", "org_id", unique=True,
+                            sqlite_where=text("cleared_at IS NULL"), postgresql_where=text("cleared_at IS NULL")),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    bytes: Mapped[int] = mapped_column(BigInteger, default=0)            # stored media at the last sweep
+    threshold_bytes: Mapped[int] = mapped_column(BigInteger, default=0)  # MEDIA_ALERT_BYTES when it crossed
+    crossed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    cleared_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 

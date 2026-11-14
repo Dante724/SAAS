@@ -40,7 +40,8 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `DB_STATEMENT_TIMEOUT_MS` | no | Postgres cancels any single statement that runs longer (default 15000). `DB_IDLE_IN_TX_TIMEOUT_MS` (default 60000) ends sessions left idle inside a transaction. Set to 0 behind a PgBouncer that rejects startup parameters, and set them on the database role instead. |
 | `SLOW_QUERY_MS` | no | Any SQL statement slower than this (default 500) logs one WARNING on `tekly.db.slow`: duration, the first 200 characters of the statement and the request id (bound values are never logged), and counts in `repairos_slow_queries_total` at `/metrics`. 0 turns it off. For the full picture per query shape, enable Postgres's `pg_stat_statements` extension (`shared_preload_libraries = 'pg_stat_statements'`, then `CREATE EXTENSION pg_stat_statements;`) and review it by `total_exec_time`. |
 | `MIGRATION_LOCK_TIMEOUT` | no | How long a migration waits for a table lock before failing (default `5s`). Migrations run with no statement timeout. See "Migrations and live traffic" below. |
-| `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
+| `MEDIA_BACKEND` | **required** | `s3` in production (see §5). Without object storage a deployed server refuses uploads (503) rather than keep files in the database. |
+| `MEDIA_MAX_BYTES` / `MEDIA_ALERT_BYTES` | no | Per-file upload limit (default 10 MB, shown in the apps) and the stored-media size per shop that alerts the platform admins (default 25 GB). Neither caps a shop's total. |
 | `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
 | `SUPPORT_EMAIL` / `SUPPORT_URL` | no | Where the in-app Help & support menu and "contact support" errors point (default `hello@tekly.app`; a `SUPPORT_URL` help page wins over the email). |
 | `VITE_SENTRY_DSN` | recommended (build arg) | Browser error tracking: pass with `docker build --build-arg VITE_SENTRY_DSN=…` (optional `VITE_RELEASE`). Unset, the Sentry SDK is never downloaded. Events carry only the user id; bodies, cookies, headers, query strings are dropped and emails masked. |
@@ -267,6 +268,23 @@ AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY   (or an instance/task role)
 Enable bucket versioning and keep the bucket private (the app streams files through
 `/api/media/{id}` with access checks). Move existing inline media with
 `POST /api/media/migrate-feed` after switching.
+
+**Safeguards (PERF-22).** There is no storage cap a shop can see or hit. Instead:
+
+- Every upload is limited to `MEDIA_MAX_BYTES` (10 MB) per file. Over it, the API answers 413
+  "That file is over the 10 MB limit"; the web app, Tekly Go and check-in say so before uploading.
+- Photos are shrunk to 2000 px on the long side (`MEDIA_IMAGE_MAX_EDGE`), re-encoded at quality 80
+  (`MEDIA_IMAGE_QUALITY`) as JPEG (WebP when transparent), upright and with EXIF/GPS removed. The apps
+  do it on the device, and the server does it again for anything that arrives larger. PDFs and other
+  files are stored as sent.
+- Production and staging never keep new attachment bytes in the database. With `MEDIA_BACKEND=db`, or
+  `s3` without `MEDIA_S3_BUCKET`, uploads fail with 503. Startup logs it at ERROR on `tekly.media`,
+  and `/api/readyz` shows `"media_store": "not configured"`. Files saved before keep opening.
+- Every 6 hours a sweep adds up each shop's stored media. A shop past `MEDIA_ALERT_BYTES` (25 GB) gets
+  one alert: logged at ERROR on `tekly.media`, listed in `/admin` (`media_alerts` on the stats, and
+  `media_bytes` on the shop), and counted in `/metrics` as `repairos_media_shops_over_threshold`.
+  The shop is never told and nothing is blocked. Once it drops below, a later crossing alerts again.
+- Cloudflare R2: set `AWS_ENDPOINT_URL_S3` as in `deploy/one-server/.env.example`; boto3 reads it.
 
 ## 6. After go-live
 

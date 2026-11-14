@@ -11,6 +11,8 @@ import { useMe } from "../../context/Me";
 import { SenseSettingsSection } from "../../components/sense/Sense";
 import { laborText } from "../../lib/labor";
 import SaveFooter from "../../components/SaveFooter";
+import { MEDIA_MAX_BYTES, TOO_LARGE_MESSAGE } from "../../lib/media";
+import { alertDialog } from "../../lib/dialog";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from a
    bar that only appears when something changed; a live preview shows how customers see the
@@ -108,6 +110,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 
   function readLogo(f?: File | null) {
     if (!f || !f.type.startsWith("image/")) return;
+    if (f.size > MEDIA_MAX_BYTES) { void alertDialog(TOO_LARGE_MESSAGE, "Logo too large"); return; }   // the server's 413, said first
     const r = new FileReader(); r.onload = () => set("logo_data", r.result as string); r.readAsDataURL(f);
   }
   const pickCountry = (iso: string) => {

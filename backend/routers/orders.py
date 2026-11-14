@@ -1230,6 +1230,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     device_id = data.device_id
     if not device_id and (data.asset_serial or data.asset_imei or data.asset_vin or data.asset_hin or data.asset_brand or data.asset_model or data.asset_image or data.asset_color or data.asset_condition) and data.client_id:
         from backend.models import Device
+        from backend.services import media as _media_svc
         new_asset = Device(
             org_id=current.org_id,
             client_id=data.client_id, owner_type="client",
@@ -1240,7 +1241,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
             color=data.asset_color, condition=data.asset_condition,
             template_key=order_template_key, asset_group_id=data.asset_group_id,
             custom_data=data.asset_custom_data or {},
-            image_data=data.asset_image,
+            image_data=await _media_svc.inline_photo(data.asset_image),   # PERF-22: 10 MB, shrunk
         )
         from backend.routers.assets import absorb_custom_passcode
         from backend.services import asset_catalog as _cat
