@@ -59,10 +59,11 @@ async def test_subscription_end_is_a_utc_day_whatever_the_shop_timezone(monkeypa
     be able to stretch (or shrink) its own subscription by picking a far zone."""
     from backend.services.auth import assert_org_active
     _freeze(monkeypatch, 2026, 10, 31, 12, 0)      # Kiritimati: 1 Nov already; Pago Pago: 31 Oct
+    # Owner decision 7: a lapsed term keeps a week's grace (services/org_live), counted in UTC days.
     for tz in (AHEAD, BEHIND, "UTC"):
-        assert_org_active(SimpleNamespace(timezone=tz, sub_status="active", sub_end=date(2026, 10, 31)))
+        assert_org_active(SimpleNamespace(timezone=tz, sub_status="active", sub_end=date(2026, 10, 24)))
         with pytest.raises(HTTPException) as e:
-            assert_org_active(SimpleNamespace(timezone=tz, sub_status="active", sub_end=date(2026, 10, 30)))
+            assert_org_active(SimpleNamespace(timezone=tz, sub_status="active", sub_end=date(2026, 10, 23)))
         assert e.value.status_code == 403
     assert dates.platform_today() == date(2026, 10, 31)
 

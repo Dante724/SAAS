@@ -94,18 +94,16 @@ def subscription_ended_message() -> str:
 
 
 def assert_org_active(org, today=None) -> None:
-    """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
-    and public-API keys alike."""
-    from backend.services.dates import platform_today
-    if org is None:
-        return
-    today = today or platform_today()
-    if org.sub_status == "suspended":
+    """Suspended orgs, and lapsed ones past their grace (services/org_live, owner decision 7), are
+    locked out of every credential they hold — staff tokens and public-API keys alike."""
+    from backend.services.org_live import off_reason
+    reason = off_reason(org, today)
+    if reason == "suspended":
         # The admin panel can leave the shop a message ("Payment overdue, call us on ..."); without
         # one, the same reply as a disabled person, so it says nothing about which it is.
         msg = (getattr(org, "suspend_message", None) or "").strip()
         raise HTTPException(status_code=403, detail=msg or account_off_message())
-    if getattr(org, "sub_end", None) and org.sub_end < today:
+    if reason == "lapsed":
         raise HTTPException(status_code=403, detail=subscription_ended_message())
 
 

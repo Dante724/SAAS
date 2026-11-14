@@ -43,7 +43,13 @@ async def test_key_rejected_once_org_is_suspended(client, tenant, db):
 async def test_key_rejected_after_subscription_end(client, tenant, db):
     key = await _key(client, tenant)
     org = await _org(db, client, tenant)
-    org.sub_end = platform_today() - timedelta(days=1)   # the lock-out's clock: the UTC day
+    # Owner decision 7: a week's grace after the term ends, then the key stops (the UTC day).
+    from backend.config import settings
+    org.sub_end = platform_today() - timedelta(days=settings.SUB_LAPSE_GRACE_DAYS)
+    await db.commit()
+    r = await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 200
+    org.sub_end = platform_today() - timedelta(days=settings.SUB_LAPSE_GRACE_DAYS + 1)
     await db.commit()
     r = await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 403
