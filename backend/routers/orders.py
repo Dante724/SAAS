@@ -598,8 +598,8 @@ async def list_orders(
     q: Optional[str] = None,                  # alias of search (global search box sends q=)
     type_id: Optional[str] = None,
     assigned_to_id: Optional[str] = None,     # "__none" = unassigned
-    priority: Optional[int] = None,
-    priority_min: Optional[int] = None,       # 1 = urgent or VIP
+    priority: Optional[int] = Query(None, ge=0, le=9),   # X4: a real range, not any 64-bit int
+    priority_min: Optional[int] = Query(None, ge=0, le=9),   # 1 = urgent or VIP
     scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
     client_id: Optional[str] = None,
     brand: Optional[str] = None,
@@ -1312,7 +1312,8 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         is_estimate=data.is_estimate,
         labour_total=labour_total,
         parts_total=parts_total,
-        total=labour_total + parts_total,
+        # BE-4: rounded from birth, as every recalculation does (it was 99.98, then 100.00)
+        total=await rounded_total(db, current.org_id, labour_total + parts_total),
         tax=order_tax(lines),
         currency_code=_cinfo["code"],
         fx_rate=_cinfo["rate"],
@@ -1382,7 +1383,7 @@ async def board(
     location_id: Optional[str] = None,        # build 138: scope the board to a branch
     search: Optional[str] = None,
     assigned_to_id: Optional[str] = None,     # "__none" = unassigned
-    priority_min: Optional[int] = None,
+    priority_min: Optional[int] = Query(None, ge=0, le=9),
     scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
     per_column: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
@@ -1495,22 +1496,35 @@ async def board(
 
 @router.get("/archived")
 async def list_archived_orders(
+    skip: int = _paging.skip_query(),
     limit: int = _paging.limit_query(100),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_orders")),
 ):
-    """Archived (soft-deleted) work orders for the owner, with who archived them,
-    when, and why. These never appear in the normal work-order lists."""
+    """Archived (soft-deleted) work orders, with who archived them, when, and why. These never
+    appear in the normal work-order lists.
+
+    QA-8: gated like archive/restore (can_delete_orders) and scoped like the live list (own jobs,
+    selected locations, hidden statuses); `total` is the real count and `skip` pages past it."""
+    from backend.services import scoping
+    role = await scoping.role_for(db, current)
+    limit = _paging.clamp(limit)
+
+    def scoped(base):
+        return scoping.scope_orders(
+            base.where(Order.org_id == current.org_id, Order.archived == True), role, current)  # noqa: E712
+
+    total = (await db.execute(scoped(select(func.count(Order.id))))).scalar() or 0
     rows = (await db.execute(
-        select(Order).where(Order.org_id == current.org_id, Order.archived == True)  # noqa: E712
+        scoped(select(Order))
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
-        .order_by(Order.archived_at.desc()).limit(_paging.clamp(limit)))).scalars().all()
+        .order_by(Order.archived_at.desc(), Order.id.desc()).offset(skip).limit(limit))).scalars().all()
     emp_names = {}
     ids = [o.archived_by_id for o in rows if o.archived_by_id]
     if ids:
         for e in (await db.execute(select(Employee).where(Employee.id.in_(ids)))).scalars().all():
             emp_names[e.id] = e.name
-    return {"total": len(rows), "items": [{
+    return {"total": total, "skip": skip, "limit": limit, "items": [{
         "id": o.id, "order_number": o.order_number, "status": o.status,
         "client": o.client.name if o.client else None,
         "total": o.total,
@@ -1622,9 +1636,12 @@ async def timing_flags(
 ):
     """Batch stall flags for open (non-terminal) orders — one shared dwell-stats
     pass, so the WO list can show a stalled badge without an N+1."""
-    from backend.services.cycle_time import compute_dwell_stats, get_order_timing
+    from backend.services.cycle_time import compute_dwell_stats, get_order_timing, load_statuses
     from backend.services import scoping  # 144ay fix: was referenced below but never imported here
+    # QA-6: stats (aggregated in SQL over a trailing window) and statuses are read once per
+    # request, not per order, so the query count is flat in the page size.
     stats = await compute_dwell_stats(db, current.org_id, is_estimate=False)
+    statuses = await load_statuses(db, current.org_id, is_estimate=False)
     terminal_keys = {s.key for s in (await db.execute(select(OrderStatus).where(
         OrderStatus.org_id == current.org_id, OrderStatus.is_terminal == True))).scalars().all()}  # noqa: E712
     _fq = select(Order).where(
@@ -1633,10 +1650,12 @@ async def timing_flags(
     _fq = scoping.scope_orders(_fq, await scoping.role_for(db, current), current)  # flags only for orders I can see
     if ids:
         _fq = _fq.where(Order.id.in_([i for i in ids.split(",") if i][:ORDER_PAGE_MAX]))
+    else:   # QA-6: bounded like a page — the newest open orders, never the whole shop
+        _fq = _fq.order_by(Order.created_at.desc()).limit(ORDER_PAGE_MAX)
     orders = (await db.execute(_fq)).scalars().all()
     flags = {}
     for o in orders:
-        t = await get_order_timing(db, o, stats)
+        t = await get_order_timing(db, o, stats, statuses)
         if t["stalled"] or t["predicted_ready_at"]:
             flags[o.id] = {"stalled": t["stalled"], "predicted_ready_at": t["predicted_ready_at"],
                            "over_by_min": t["over_by_min"]}
@@ -4703,6 +4722,17 @@ async def _stop_job_timers(db, order, bill: bool = True) -> None:
                                f"{len(running)} running timer{'s' if len(running) != 1 else ''} stopped (job closed)")
 
 
+ROUNDING_STEP = 0.05
+
+
+async def rounded_total(db, org_id: str, total):
+    """Item 3: optional whole-document rounding (nearest ROUNDING_STEP). Off by default. The one
+    rule for a job's total: creation, every recalculation and the gift-card cap (BE-4) use it."""
+    on = (await db.execute(select(Organisation.rounding_enabled).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    return round_to_step(total, ROUNDING_STEP) if on else total
+
+
 async def _recalc_order(db, order):
     """Recompute an order's labour/parts/total from its lines, and its unsent invoices with it."""
     prev_total = float(order.total or 0)
@@ -4717,10 +4747,7 @@ async def _recalc_order(db, order):
         # Discounts left behind after the work they paid for was removed: the job is worth 0, and
         # labour + parts still add up to it (discount lines sit in labour_total).
         order.labour_total = msum([labour, fees, -total])
-    # Item 3: optional whole-document rounding (nearest 0.05). Off by default.
-    _org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
-    if _org and getattr(_org, "rounding_enabled", False):
-        total = round_to_step(total, 0.05)
+    total = await rounded_total(db, order.org_id, total)
     # Never below zero: discount lines (gift card, coupon, loyalty) left behind after the lines
     # they paid for were removed made the total negative, which then read as an "overpayment" and
     # could be refunded in cash (audit 2026-10-29, H5).

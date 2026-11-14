@@ -383,7 +383,9 @@ async def _rep_lead_source_revenue(db, org, df, dt, **kw):
     pq = (select(src, func.coalesce(func.sum(case((is_refund, -func.abs(Payment.amount)), else_=Payment.amount)), 0))
           .select_from(Payment).outerjoin(Order, Order.id == Payment.order_id)
           .join(Client, Client.id == func.coalesce(Payment.client_id, Order.client_id))
-          .where(Client.org_id == org, Payment.paid_at >= df, Payment.paid_at <= dt).group_by(src))
+          # BE-7: new money only — a gift card or the client's balance was counted when it came in
+          .where(Client.org_id == org, Payment.paid_at >= df, Payment.paid_at <= dt,
+                 money_rules.money_in_payment()).group_by(src))
     paid = dict((await db.execute(pq)).all())
     keys = sorted(set(new_clients) | set(orders) | set(paid), key=lambda k: -float(paid.get(k, 0) or 0))
     cols = ["Lead source", "New clients", "Work orders", "Order value", "Paid", "Avg paid / new client"]
@@ -1223,6 +1225,65 @@ async def _assert_report_access(db, current, report_key: str, export: bool = Fal
 PAYROLL_REPORTS = {"payroll", "labor_cost", "labor_utilization", "labor_by_job"}
 
 
+# Final review SEC-04: report rows are plain lists, so the cost-redaction middleware (which strips
+# fields by name) never sees them and the XLSX/CSV exports skip it altogether. Instead each report
+# names its cost- and profit-bearing columns here, and _redact_columns drops the ones the viewer may
+# not see before the screen, the XLSX or the CSV is built: one rule for all three.
+_COST = ("can_view_purchase_price",)
+_PROFIT = ("can_see_profit",)
+_MARKUP = ("can_see_profit", "can_view_purchase_price")      # profit ÷ cost: reveals the cost
+COLUMN_PERMS: dict[str, dict[str, tuple]] = {
+    "technicians":       {"Profit": _PROFIT},
+    "provided_services": {"Cost": _COST, "Gross profit": _PROFIT, "Markup %": _MARKUP},
+    "sold_products":     {"Cost": _COST, "Gross profit": _PROFIT, "Markup %": _MARKUP},
+    "stock_levels":      {"Value (cost)": _COST},
+    "assortment":        {"Unit cost": _COST, "Value": _COST},
+    "purchase_list":     {"Est. cost": _COST},
+    "reorder_forecast":  {"Est. cost": _COST},
+    "dead_stock":        {"Unit cost": _COST, "Tied-up cash": _COST},
+    "expiration":        {"Value at risk": _COST},
+    # gated as a whole by REPORT_PERMS, listed so a later loosening can't leak them
+    "wo_profit":         {"Cost": _COST, "Gross profit": _PROFIT, "Markup %": _MARKUP},
+    "dropped_jobs":      {"Parts cost": _COST, "Labour cost": _COST, "Commission": _COST, "Profit": _PROFIT},
+    "stock_valuation":   {"Stock value (cost)": _COST},
+}
+
+
+async def _redact_columns(db, current, report_key: str, cols: list, rows: list) -> tuple[list, list]:
+    """Drop the columns of `report_key` that need a permission the caller lacks."""
+    need = COLUMN_PERMS.get(report_key)
+    if not need:
+        return cols, rows
+    from backend.services.auth import has_perm
+    held: dict[str, bool] = {}
+    drop = set()
+    for i, col in enumerate(cols):
+        for perm in need.get(col, ()):
+            if perm not in held:
+                held[perm] = await has_perm(db, current, perm)
+            if not held[perm]:
+                drop.add(i)
+    if not drop:
+        return cols, rows
+    keep = [i for i in range(len(cols)) if i not in drop]
+    return ([cols[i] for i in keep],
+            [[r[i] for i in keep if i < len(r)] if isinstance(r, (list, tuple)) else r for r in rows])
+
+
+async def _build_report(db, current, report_key: str, location_id, role_id, employee_id,
+                        filters, date_from, date_to):
+    """Run a report for the screen or an export: scope, shop day, builder, column redaction."""
+    _tab, _title, builder = REPORTS[report_key]
+    location_id = await _scoped_location(db, current, location_id)
+    tz = await shop_tzname(db, current.org_id, location_id)
+    df, dt = _report_window(date_from, date_to, tz)
+    df = await _report_from(db, current, report_key, df)
+    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
+                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
+    cols, rows = await _redact_columns(db, current, report_key, cols, rows)
+    return df, dt, cols, rows
+
+
 class ReportFilters:
     """Optional report filters; each builder reads only the ones it understands, unknown values
     are dropped. movement: product turnover (with | without | all); hide_zero: closed jobs;
@@ -1317,14 +1378,9 @@ async def run_report(
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
-    tab, title, builder = REPORTS[report_key]
-    location_id = await _scoped_location(db, current, location_id)
-    tz = await shop_tzname(db, current.org_id, location_id)
-    df, dt = _report_window(date_from, date_to, tz)
-    df = await _report_from(db, current, report_key, df)
-    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
-                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
-    # totals row for numeric columns
+    tab, title, _builder = REPORTS[report_key]
+    _df, _dt, cols, rows = await _build_report(db, current, report_key, location_id, role_id, employee_id,
+                                               filters, date_from, date_to)
     return {"key": report_key, "title": title, "tab": tab,
             "columns": cols, "rows": rows, "row_count": len(rows)}
 
@@ -1348,13 +1404,9 @@ async def export_report(
         raise HTTPException(404, "Unknown report")
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
-    tab, title, builder = REPORTS[report_key]
-    location_id = await _scoped_location(db, current, location_id)
-    tz = await shop_tzname(db, current.org_id, location_id)
-    df, dt = _report_window(date_from, date_to, tz)
-    df = await _report_from(db, current, report_key, df)
-    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
-                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
+    tab, title, _builder = REPORTS[report_key]
+    df, dt, cols, rows = await _build_report(db, current, report_key, location_id, role_id, employee_id,
+                                             filters, date_from, date_to)
 
     def _write():
         """PERF-12: a write-only workbook streams each row to disk as it is appended (a normal one
@@ -1437,13 +1489,8 @@ async def export_report_csv(
     if report_key not in REPORTS:
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
-    _tab, _title, builder = REPORTS[report_key]
-    location_id = await _scoped_location(db, current, location_id)
-    tz = await shop_tzname(db, current.org_id, location_id)
-    df, dt = _report_window(date_from, date_to, tz)
-    df = await _report_from(db, current, report_key, df)
-    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
-                               **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
+    df, dt, cols, rows = await _build_report(db, current, report_key, location_id, role_id, employee_id,
+                                             filters, date_from, date_to)
     fname = f"{report_key}_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
     return StreamingResponse(_csv_chunks(cols, rows), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})

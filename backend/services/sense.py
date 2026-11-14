@@ -345,6 +345,7 @@ async def build_brief(db: AsyncSession, org_id: str, *, show_money: bool, now: O
                       owner: bool = False) -> dict:
     """`owner`: the reader is the shop owner, the only person the Watchdog line is for."""
     from backend.models import Invoice, Organisation, Payment
+    from backend.services.revenue import money_in_payment
     now = now or datetime.utcnow()
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
     tz = _tz(org)
@@ -365,7 +366,8 @@ async def build_brief(db: AsyncSession, org_id: str, *, show_money: bool, now: O
             .where(or_(Invoice.id.isnot(None), Order.id.isnot(None)),
                    or_(Invoice.id.is_(None), Invoice.org_id == org_id),
                    or_(Order.id.is_(None), Order.org_id == org_id),
-                   Payment.kind != "refund", Payment.paid_at >= y0, Payment.paid_at < y1))).scalar_one()
+                   Payment.kind != "refund", Payment.paid_at >= y0, Payment.paid_at < y1,
+                   money_in_payment()))).scalar_one()   # BE-7: not gift-card / balance spends
         yesterday["paid"] = round(float(paid or 0), 2)
 
     due_today = (await db.execute(select(func.count(Order.id)).where(
