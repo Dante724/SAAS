@@ -187,5 +187,10 @@ async def ensure_seed_admin(db: AsyncSession) -> None:
     elif settings.is_deployed and password_problem(pw):
         log.warning("No platform admin seeded: PLATFORM_ADMIN_PASSWORD is too weak (%s).", password_problem(pw))
         return
+    from sqlalchemy.exc import IntegrityError
     db.add(PlatformAdmin(email=email.lower(), name="Platform Admin", password_hash=hash_password(pw)))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # another worker seeded it first (several uvicorn workers start at once on a fresh DB)
+        await db.rollback()

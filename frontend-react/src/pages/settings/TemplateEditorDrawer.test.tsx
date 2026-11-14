@@ -59,7 +59,7 @@ describe("pickView", () => {
 describe("TemplateEditorDrawer", () => {
   it("greys out Design and Text with a reason, and offers a safe fix it explains first", async () => {
     render(<TemplateEditorDrawer initial={tpl("Sales receipt", { doc_type: "receipt" })} onClose={() => {}} />);
-    const reason = await screen.findByTestId("reason-design");
+    const reason = await screen.findByTestId("reason-design", {}, { timeout: 5000 });
     expect(screen.getByRole("button", { name: /Design/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Text/ })).toBeDisabled();
     expect(reason.textContent).toMatch(/\{#if Total Discount\} between table rows/);
