@@ -287,6 +287,10 @@ async def admin_stats(ctx: AdminCtx = Depends(require_admin_perm("view_shops")),
         counts[_segment(o)] += 1
     out = {"total": len(orgs), "segments": counts,
            "my_book": sum(1 for o in orgs if o.assigned_admin_id == ctx.admin.id)}
+    # PERF-22: shops past the media alert threshold (platform admins only; the shop is never told).
+    from backend.services.media_usage import open_alerts
+    names = {o.id: o.name for o in orgs}
+    out["media_alerts"] = [{**a, "name": names.get(a["org_id"])} for a in await open_alerts(db, names)]
     if ctx.can("approve_requests"):
         out["pending_requests"] = (await db.execute(select(func.count()).select_from(AdminApprovalRequest).where(
             AdminApprovalRequest.status == "pending", AdminApprovalRequest.expires_at > datetime.utcnow()))).scalar()
@@ -355,6 +359,9 @@ async def tenant_detail(org_id: str, ctx: AdminCtx = Depends(require_admin_perm(
         Order.org_id == org_id, Order.created_at >= since))).scalar()
     row["last_activity_at"] = _iso((await db.execute(select(func.max(Order.created_at)).where(
         Order.org_id == org_id))).scalar())
+    from backend.services import media_usage
+    row["media_bytes"] = await media_usage.shop_bytes(db, org_id)         # PERF-22: stored media
+    row["media_alert"] = bool(await media_usage.open_alerts(db, [org_id]))
     notes = (await db.execute(select(AdminShopNote).where(AdminShopNote.org_id == org_id)
                               .order_by(AdminShopNote.created_at.desc()).limit(100))).scalars().all()
     row["notes"] = [{"id": n.id, "kind": n.kind, "body": n.body, "by": names.get(n.admin_id),

@@ -5,7 +5,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import AuthedImage from "../../components/AuthedImage";
 import { confirmDialog, promptDialog } from "../../lib/dialog";
-import { readAsDataUrl } from "../../lib/files";
+import { fileForUpload } from "../../lib/media";
 import { Gate, useMe } from "../../context/Me";
 import { currencySymbol, money } from "./types";
 import { flashDelivery, type Flash } from "../../lib/delivery";
@@ -36,22 +36,8 @@ const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
 };
 const fmtDay = (iso?: string | null) => serverDate(iso)?.toLocaleDateString([], { month: "short", day: "numeric" }) || "";
 
-// Shrink a photo before upload (long edge 1400px, JPEG) so proof photos stay light.
-async function shrinkPhoto(f: File): Promise<string> {
-  const src = await readAsDataUrl(f);
-  return new Promise((res) => {
-    const img = new Image();
-    img.onload = () => {
-      const k = Math.min(1, 1400 / Math.max(img.width, img.height));
-      const c = document.createElement("canvas");
-      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
-      res(c.toDataURL("image/jpeg", 0.82));
-    };
-    img.onerror = () => res(src);
-    img.src = src;
-  });
-}
+// Proof photos: the shared shrink and per-file limit (lib/media.ts, PERF-22).
+const shrinkPhoto = fileForUpload;
 
 // A small pill toggle for a few short choices (type, urgency) instead of a dropdown.
 function Segmented({ label, value, onChange, options }: {

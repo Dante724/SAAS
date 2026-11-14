@@ -408,3 +408,15 @@ async def sweep_overdue_tasks() -> None:
                 await db.rollback()
     if sent:
         log.info("task-overdue-sweep: alerted %d overdue task(s)", sent)
+
+
+@job_runner.every(6 * 3600, "media-usage-sweep")
+async def sweep_media_usage() -> None:
+    """PERF-22: tell the platform admins (never the shop) once when a shop's stored media passes
+    MEDIA_ALERT_BYTES; logged at ERROR on tekly.media and counted in /metrics. Platform-wide, reads
+    sizes only. See services/media_usage.py."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.media_usage import sweep
+
+    async with AsyncSessionLocal() as db:
+        await sweep(db)

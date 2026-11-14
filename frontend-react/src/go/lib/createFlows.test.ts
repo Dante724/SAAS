@@ -62,9 +62,9 @@ describe("payment", () => {
 });
 
 describe("photos", () => {
-  it("shrinks to 1600px on the long edge, never upscales", () => {
-    expect(fitWithin(4032, 3024)).toEqual({ w: 1600, h: 1200 });
-    expect(fitWithin(3024, 4032)).toEqual({ w: 1200, h: 1600 });
+  it("shrinks to 2000px on the long edge (the shared PERF-22 setting), never upscales", () => {
+    expect(fitWithin(4032, 3024)).toEqual({ w: 2000, h: 1500 });
+    expect(fitWithin(3024, 4032)).toEqual({ w: 1500, h: 2000 });
     expect(fitWithin(800, 600)).toEqual({ w: 800, h: 600 });
   });
 });

@@ -55,5 +55,7 @@ class BodySizeLimitMiddleware:
                 await self._reject(scope, receive, send)
 
     async def _reject(self, scope, receive, send):
-        mb = self.max_bytes / (1024 * 1024)
-        await JSONResponse({"detail": f"Request too large (max {mb:g} MB)"}, 413)(scope, receive, send)
+        # Almost always an attachment that is too big: name the per-file limit people can act on
+        # (PERF-22), not the request cap, which is larger only to fit base64 and the JSON around it.
+        from backend.services.media import too_large_message
+        await JSONResponse({"detail": too_large_message()}, 413)(scope, receive, send)

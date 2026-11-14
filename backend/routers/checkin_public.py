@@ -23,7 +23,6 @@ from backend.services import checkin as svc
 router = APIRouter(prefix="/api/public/checkin", tags=["public"])
 
 MAX_SIGNATURE = 400_000          # data-URL characters
-MAX_PHOTO = 7_000_000            # data-URL characters (~5 MB image)
 MAX_PHOTOS = 3
 MAX_PER_POINT_DAY = 150          # new check-ins a point takes per queue day
 MAX_PER_ORG_DAY = 500            # new check-ins a shop takes per 24 h, all points
@@ -320,9 +319,11 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
         raise HTTPException(422, f"Add up to {MAX_PHOTOS} photos")
     if mode == "key_drop" and point.require_photo and not data.photos:
         raise HTTPException(422, "Add a photo of the dashboard")
+    from backend.services import media as _media
     for p in data.photos:
-        if not p.startswith("data:image/") or len(p) > MAX_PHOTO:
-            raise HTTPException(422, "Photos must be images under 5 MB")
+        if not p.startswith("data:image/"):
+            raise HTTPException(422, "Photos must be images")
+        _media.check_size(p)   # PERF-22: the one per-file limit, 413 (it was a separate ~5 MB here)
 
     jt_name = next((t["name"] for t in form["job_types"] if t["id"] == job_type_id), None)
     inquiry = " · ".join(x for x in [jt_name, issue] if x)[:2000]
@@ -384,10 +385,8 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
     c.signature_png, c.signer_name, c.signer_ip, c.terms_hash = data.signature, name, ip[:64], terms_hash
     c.key_tag = (data.key_tag or "").strip() or None
     if data.photos:
-        try:
-            blobs = [await media.store(db, point.org_id, p, name="checkin.jpg") for p in data.photos]
-        except ValueError:
-            raise HTTPException(422, "Photos must be images under 5 MB") from None
+        # Over the per-file limit -> MediaTooLarge -> 413 with the real limit (PERF-22).
+        blobs = [await media.store(db, point.org_id, p, name="checkin.jpg") for p in data.photos]
         c.photo_ids = [b.id for b in blobs]
 
     if not existing:

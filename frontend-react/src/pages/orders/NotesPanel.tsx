@@ -8,7 +8,7 @@ import EmptyState from "../../components/EmptyState";
 import { api, openAuthedDoc } from "../../api/client";
 import { sectionCard } from "../../components/Section";
 import { useMe } from "../../context/Me";
-import { readAsDataUrl } from "../../lib/files";
+import { dataUrlMime, fileForUpload } from "../../lib/media";
 import AuthedImage from "../../components/AuthedImage";
 import { fmtServerTime } from "../../lib/serverTime";
 import { buttonClass } from "../../components/Button";
@@ -72,9 +72,9 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
     setBusy(true);
     try {
       for (const f of Array.from(files)) {
-        const data = await readAsDataUrl(f);
+        const data = await fileForUpload(f);
         await api.post(`/feed/order/${orderId}`, {
-          item_type: f.type.startsWith("image/") ? "photo" : "file", media_data: data, media_name: f.name, media_mime: f.type,
+          item_type: f.type.startsWith("image/") ? "photo" : "file", media_data: data, media_name: f.name, media_mime: dataUrlMime(data, f.type),
           visibility: defaults.file,
         });
       }

@@ -450,7 +450,10 @@
       if (r.ok) { v.querySelector('#o-note').value = ''; queuedToast(r); }
     });
     // Attachments
+    // PERF-22: the shared per-file limit (frontend-react/src/lib/media.ts); the server shrinks photos.
+    const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
     const upload = (f, kind) => {
+      if (f.size > MEDIA_MAX_BYTES) return Toast && Toast.error && Toast.error('That file is over the 10 MB limit. Try a smaller file.');
       const rd = new FileReader();
       rd.onload = async () => {
         const r = await RosPWA.mutate('POST', '/api/feed/order/' + id,
@@ -462,7 +465,6 @@
     v.querySelector('#o-photo').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) upload(f, 'photo'); });
     v.querySelector('#o-file').addEventListener('change', (e) => {
       const f = e.target.files[0]; if (!f) return;
-      if (f.size > 8 * 1024 * 1024) return Toast && Toast.error && Toast.error('File too large (max ~8MB for mobile upload).');
       upload(f, f.type.startsWith('image') ? 'photo' : 'file');
     });
     setupSignature(v.querySelector('#o-sig'), v.querySelector('#o-sig-clear'), v.querySelector('#o-sig-save'), id, queuedToast);

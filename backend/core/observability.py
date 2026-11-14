@@ -53,6 +53,11 @@ def render_metrics() -> str:
         lines += ["# HELP repairos_integrity_failed_shops Shops the last integrity sweep could not check",
                   "# TYPE repairos_integrity_failed_shops gauge",
                   f"repairos_integrity_failed_shops {int(reconcile.LAST_FAILED)}"]
+    from backend.services import media_usage
+    if media_usage.LAST_OVER is not None:   # set by the media usage sweep (PERF-22)
+        lines += ["# HELP repairos_media_shops_over_threshold Shops past MEDIA_ALERT_BYTES of stored media",
+                  "# TYPE repairos_media_shops_over_threshold gauge",
+                  f"repairos_media_shops_over_threshold {int(media_usage.LAST_OVER)}"]
     return "\n".join(lines) + "\n"
 
 

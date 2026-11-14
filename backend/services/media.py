@@ -15,12 +15,29 @@ import asyncio
 import base64
 import functools
 import hashlib
+import io
+import logging
 import os
 import re
 from typing import Optional, Tuple
 
 from backend.config import settings
 from backend.models import MediaBlob
+
+log = logging.getLogger("tekly.media")
+
+
+class MediaTooLarge(ValueError):
+    """A file over MEDIA_MAX_BYTES. main.py answers it with 413 and too_large_message()."""
+
+
+class MediaStoreUnavailable(RuntimeError):
+    """A deployed server with no object storage: the bytes would land in the database (PERF-22).
+    main.py answers it with 503. Not a ValueError, so no route's size handler can swallow it."""
+
+
+STORE_UNAVAILABLE_MESSAGE = ("File storage isn't set up on this server yet, so the file wasn't saved. "
+                             "Your other changes are fine. Please let Tekly support know.")
 
 _DATA_URL = re.compile(r"^data:([^;,]+)?(;base64)?,(.*)$", re.S)
 
@@ -48,7 +65,7 @@ def _key_for(org_id: str, raw: bytes, name: Optional[str]) -> str:
 
 def max_bytes() -> int:
     """The one size ceiling for any attachment, whatever the backend (PERF-22)."""
-    return int(getattr(settings, "MEDIA_MAX_BYTES", 8 * 1024 * 1024))
+    return int(settings.MEDIA_MAX_BYTES)
 
 
 def payload_bytes(payload: Optional[str]) -> int:
@@ -68,8 +85,119 @@ def too_large(payload: Optional[str]) -> bool:
     return payload_bytes(payload) > max_bytes()
 
 
+def _limit_text() -> str:
+    n = max_bytes()
+    return f"{n / (1024 * 1024):g} MB" if n >= 1024 * 1024 else f"{n // 1024} KB"
+
+
 def too_large_message() -> str:
-    return f"Attachment too large (max {max_bytes() // (1024 * 1024)} MB)"
+    """The one wording for an over-limit file, server and client alike (frontend lib/media.ts)."""
+    return f"That file is over the {_limit_text()} limit. Try a smaller file."
+
+
+def check_size(payload: Optional[str]) -> None:
+    """Raise MediaTooLarge for a payload over the limit: for the few fields still kept inline
+    (asset photo, shop logo, drawn signature), which don't go through store()."""
+    if payload and too_large(payload):
+        raise MediaTooLarge(too_large_message())
+
+
+# ── where the bytes may live (PERF-22, item 5) ──────────────────────────────────────────────
+def _deployed() -> bool:
+    return settings.is_deployed
+
+
+def storage_problem() -> Optional[str]:
+    """Why this server must not take new uploads, or None. Production and staging never keep
+    attachment bytes in the database: without object storage (or a persistent local volume) the
+    upload is refused instead of quietly falling back to the database. Dev and tests may use db."""
+    if not _deployed():
+        return None
+    backend = (settings.MEDIA_BACKEND or "db").lower()
+    if backend == "local" or (backend == "s3" and settings.MEDIA_S3_BUCKET):
+        return None
+    if backend == "s3":
+        return ("MEDIA_BACKEND=s3 but MEDIA_S3_BUCKET is not set: new uploads are refused "
+                "(never kept in the database). Set the bucket and its keys.")
+    return (f"MEDIA_BACKEND={backend}: this server has no object storage, so new uploads are refused "
+            "(never kept in the database). Set MEDIA_BACKEND=s3 with MEDIA_S3_BUCKET and its keys.")
+
+
+def warn_if_unconfigured() -> None:
+    """Startup: say loudly when uploads will be refused (logged at ERROR, so alerting sees it)."""
+    problem = storage_problem()
+    if problem:
+        log.error("media storage not configured: %s", problem)
+
+
+def _require_store() -> None:
+    if storage_problem():
+        raise MediaStoreUnavailable(STORE_UNAVAILABLE_MESSAGE)
+
+
+# ── photos shrink on the server too (PERF-22, item 3) ───────────────────────────────────────
+# The apps shrink photos before upload; this is the safety net for anything that didn't (an old
+# app, the API, a browser that couldn't decode it). Only JPEG/PNG/WebP stills are touched; a GIF,
+# SVG, PDF or anything we can't decode is stored exactly as sent.
+_SHRINKABLE = {"image/jpeg", "image/jpg", "image/pjpeg", "image/png", "image/webp"}
+_MAX_PIXELS = 50_000_000      # never decode a "photo" bigger than this (decompression bombs)
+_EXT = {"image/jpeg": "jpg", "image/webp": "webp"}
+
+
+def shrink_image(raw: bytes, mime: Optional[str]) -> Tuple[bytes, Optional[str]]:
+    """(bytes, mime) of the photo to keep: at most MEDIA_IMAGE_MAX_EDGE on the long side, turned
+    upright, with no EXIF (camera, GPS). A photo already small and clean is kept byte for byte."""
+    edge = int(settings.MEDIA_IMAGE_MAX_EDGE or 0)
+    if edge <= 0 or (mime or "").lower() not in _SHRINKABLE:
+        return raw, mime
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(io.BytesIO(raw)) as img:
+            if img.format not in ("JPEG", "PNG", "WEBP") or getattr(img, "is_animated", False):
+                return raw, mime
+            w, h = img.size
+            if not w or not h or w * h > _MAX_PIXELS:
+                return raw, mime
+            exif = img.getexif()
+            if max(w, h) <= edge and not exif:
+                return raw, mime
+            out_img = ImageOps.exif_transpose(img)
+            out_img.thumbnail((edge, edge), Image.LANCZOS)
+            alpha = out_img.mode in ("RGBA", "LA", "PA") or (
+                out_img.mode == "P" and "transparency" in out_img.info)
+            q = int(settings.MEDIA_IMAGE_QUALITY or 80)
+            buf = io.BytesIO()
+            if alpha:   # keep transparency (a logo, a cut-out): WebP, not JPEG
+                out_img.save(buf, "WEBP", quality=q)
+                return buf.getvalue(), "image/webp"
+            out_img.convert("RGB").save(buf, "JPEG", quality=q, optimize=True)
+            return buf.getvalue(), "image/jpeg"
+    except Exception:  # noqa: BLE001 — the safety net never loses a file: keep it as sent
+        return raw, mime
+
+
+def _renamed(name: Optional[str], old_mime: Optional[str], new_mime: Optional[str]) -> Optional[str]:
+    if not name or new_mime == old_mime or new_mime not in _EXT:
+        return name
+    base = name.rsplit(".", 1)[0] if "." in name else name
+    return f"{base}.{_EXT[new_mime]}"
+
+
+async def inline_photo(value: Optional[str]) -> Optional[str]:
+    """A photo for a field still kept inline (asset photo): the size limit, then the shrink."""
+    check_size(value)
+    return await shrink_data_url(value)
+
+
+async def shrink_data_url(value: Optional[str]) -> Optional[str]:
+    """shrink_image for a field still kept inline as a data URL (the asset photo)."""
+    if not value or not value.startswith("data:image/"):
+        return value
+    raw, mime = await decode(value)
+    new, new_mime = await asyncio.to_thread(shrink_image, raw, mime)
+    if new is raw:
+        return value
+    return f"data:{new_mime};base64," + base64.b64encode(new).decode()
 
 
 @functools.lru_cache(maxsize=4)
@@ -119,12 +247,19 @@ def active_backend() -> str:
 
 async def store(db, org_id: str, payload: str, *, name: Optional[str] = None,
                 mime: Optional[str] = None) -> MediaBlob:
+    _require_store()
+    # Cheap first: the size from the base64 length, before decoding anything (DoS guard).
+    if too_large(payload):
+        raise MediaTooLarge(too_large_message())
     raw, sniffed_mime = await decode(payload)
-    # Build 144cq: enforce a hard size ceiling on every upload (DoS / abuse guard).
-    _cap = max_bytes()
-    if len(raw) > _cap:
-        raise ValueError(f"upload too large (max {_cap // (1024 * 1024)} MB)")
+    if len(raw) > max_bytes():
+        raise MediaTooLarge(too_large_message())
     mime = mime or sniffed_mime
+    new, new_mime = await asyncio.to_thread(shrink_image, raw, mime)
+    if new is not raw:
+        name = _renamed(name, mime, new_mime)
+        raw, mime = new, new_mime
+        payload = f"data:{mime};base64," + base64.b64encode(raw).decode()
     backend = active_backend()
     blob = MediaBlob(org_id=org_id, backend=backend, mime=mime, name=name,
                      size_bytes=len(raw))
@@ -356,7 +491,10 @@ async def offload_if_enabled(db, org_id, payload, *, name=None, mime=None):
     """Convenience: when a non-db backend is active, store the payload and return
     (blob_id, None) so the caller nulls the inline column. Under db, returns
     (None, payload) to keep it inline. Lets any model adopt offload with one call."""
-    if not payload or active_backend() == "db":
+    if not payload:
+        return None, payload
+    _require_store()
+    if active_backend() == "db":
         return None, payload
     blob = await store(db, org_id, payload, name=name, mime=mime)
     return blob.id, None

@@ -1,16 +1,12 @@
-// Job photos from the phone: shrink on the device (long edge 1600px, JPEG ~0.72), which also drops
-// EXIF/GPS because the image is redrawn on a canvas; upload to /api/media; then append the ids to
-// the job with POST /orders/{id}/intake-photos/add (never the replace-everything PATCH).
+// Job photos from the phone: shrink on the device with the shared settings (lib/media.ts, PERF-22:
+// long edge 2000px, JPEG 0.8, the 10 MB per-file limit), which also drops EXIF/GPS because the
+// image is redrawn on a canvas; upload to /api/media; then append the ids to the job with
+// POST /orders/{id}/intake-photos/add (never the replace-everything PATCH).
 import { api } from "../../api/client";
+import { FileTooLargeError, MEDIA_MAX_BYTES, PHOTO_MAX_EDGE, PHOTO_QUALITY, dataUrlBytes, fitWithin } from "../../lib/media";
 
-export const MAX_EDGE = 1600;
-
-/** Size that fits inside `max` on the long edge, keeping the aspect ratio (never upscales). */
-export function fitWithin(w: number, h: number, max = MAX_EDGE): { w: number; h: number } {
-  if (!w || !h) return { w: 0, h: 0 };
-  const s = Math.min(1, max / Math.max(w, h));
-  return { w: Math.round(w * s), h: Math.round(h * s) };
-}
+export { fitWithin };
+export const MAX_EDGE = PHOTO_MAX_EDGE;
 
 function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((res, rej) => {
@@ -22,14 +18,16 @@ function loadImage(file: Blob): Promise<HTMLImageElement> {
   });
 }
 
-/** A camera photo → a small JPEG data URL with no EXIF. */
-export async function shrinkPhoto(file: Blob, quality = 0.72): Promise<string> {
+/** A camera photo → a JPEG data URL with no EXIF, within the per-file limit. */
+export async function shrinkPhoto(file: Blob, quality = PHOTO_QUALITY): Promise<string> {
   const img = await loadImage(file);
   const { w, h } = fitWithin(img.naturalWidth, img.naturalHeight);
   const c = document.createElement("canvas");
   c.width = w; c.height = h;
   c.getContext("2d")!.drawImage(img, 0, 0, w, h);
-  return c.toDataURL("image/jpeg", quality);
+  const out = c.toDataURL("image/jpeg", quality);
+  if (dataUrlBytes(out) > MEDIA_MAX_BYTES) throw new FileTooLargeError();
+  return out;
 }
 
 export async function uploadPhoto(dataUrl: string, name = "photo.jpg"): Promise<string> {

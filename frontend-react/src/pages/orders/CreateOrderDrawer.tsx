@@ -11,7 +11,7 @@ import { api, idempotencyKey } from "../../api/client";
 import { autoPrintForJob } from "../../lib/autoPrint";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import { useClientSearch } from "../../hooks/useClientSearch";
-import { readAsDataUrl } from "../../lib/files";
+import { dataUrlMime, fileForUpload } from "../../lib/media";
 import { alertDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
 import PhotoAnnotator from "./PhotoAnnotator";
@@ -116,8 +116,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     try {
       const added: { id: string; url: string }[] = [];
       for (const f of Array.from(files)) {
-        const data = await readAsDataUrl(f);
-        const r = await api.post<any>("/media", { data, name: f.name, mime: f.type });
+        const data = await fileForUpload(f);
+        const r = await api.post<any>("/media", { data, name: f.name, mime: dataUrlMime(data, f.type) });
         added.push({ id: r.id, url: r.url });
       }
       setIntakePhotos((cur) => [...cur, ...added]);

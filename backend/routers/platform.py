@@ -41,8 +41,12 @@ async def readyz(db: AsyncSession = Depends(get_db)):
     unreachable case is a warning for operators, not a reason to pull the instance (M19)."""
     try:
         await db.execute(text("SELECT 1"))
+        from backend.services.media import storage_problem
+        # PERF-22: uploads are refused while a deployed server has no object storage. A warning for
+        # operators (the rest of the app works), so it doesn't pull the instance either.
         return {"status": "ready", "db": "ok", "database": "up",
-                "rate_limit_store": await ratelimit.store_status()}
+                "rate_limit_store": await ratelimit.store_status(),
+                "media_store": "not configured" if storage_problem() else "ok"}
     except Exception:  # noqa: BLE001
         # The driver error names hosts, users and database names — log it, don't publish it.
         log.exception("readiness check: database unreachable")
