@@ -74,9 +74,10 @@ async def test_archived_list_follows_own_jobs_scope(client, tenant, db):
 
 async def test_archived_list_follows_location_scope(client, tenant, db):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
+    main = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     b = await _branch(db, me["org_id"])
     at_b = await _archived(db, me["org_id"], 1, location_id=b)
-    await _archived(db, me["org_id"], 2)                                  # main branch
+    await _archived(db, me["org_id"], 2, location_id=main)                # main branch
     H, _ = await _login(client, db, me["org_id"], VIEW, location_scope="selected", location_ids=f'["{b}"]')
     r = (await client.get("/api/orders/archived", headers=H)).json()
     assert [x["id"] for x in r["items"]] == at_b and r["total"] == 1
