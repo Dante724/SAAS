@@ -73,12 +73,25 @@ def day_end_utc(day: date, tzname: str | None) -> datetime:
     return day_start_utc(day + timedelta(days=1), tzname)
 
 
+class BadDateValue(HTTPException, ValueError):
+    """A malformed date from the request (final review QA-4). It is a ValueError, so callers that
+    catch ValueError to word their own error still do; one nobody catches is a 422, not a 500
+    (FastAPI answers any HTTPException with its status and detail)."""
+
+    def __init__(self, value):
+        super().__init__(422, f"Invalid date: expected YYYY-MM-DD or an ISO datetime, got {str(value)[:40]!r}")
+
+
 def range_edge(value: str, tzname: str | None, *, end: bool) -> datetime:
     """One end of a report window as naive UTC, the one rule every report uses. A date-only value
     (YYYY-MM-DD, what the Reports, P&L and export screens send) is a whole day on the shop's clock,
     the same day the dashboard calls "today"; a date-only "To" covers all of that day. A value with
-    a time is taken as given. Raises ValueError on a malformed value."""
-    parsed = datetime.fromisoformat(value)
+    a time is taken as given. Raises BadDateValue (a ValueError, and a 422 if uncaught) on a
+    malformed value."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise BadDateValue(value) from None
     if parsed.tzinfo is not None:
         return parsed.astimezone(timezone.utc).replace(tzinfo=None)
     if parsed.time() != time.min:
@@ -103,6 +116,27 @@ def parse_dt(value, field: str = "date") -> datetime:
         return datetime.fromisoformat(value)
     except (ValueError, TypeError):
         raise HTTPException(400, f"Invalid {field}: expected an ISO datetime, got {value!r}")
+
+
+async def parse_money_moment(db, org_id: str, value, field: str = "date") -> tuple[datetime, date]:
+    """When money moved, from a backdated payment / cash entry: (naive UTC instant, shop day).
+
+    A date-only value (what the Record payment and cash entry forms send) is that day on the shop's
+    clock: now if it is today there, else noon shop time, so reports that bucket by the shop's day
+    (day_start_utc / report_edge) put it on that day. It used to be stored as UTC midnight, the
+    shop's previous day anywhere west of UTC (BE-3). A value with a zone is that instant; a naive
+    value with a time is taken as UTC, as before."""
+    tzname = await shop_tzname(db, org_id)
+    raw = value.strip() if isinstance(value, str) else value
+    if isinstance(raw, str) and len(raw) == 10:
+        day = parse_date(raw, field)
+        if day == today_in(tzname):
+            return now_utc(), day
+        return wall_to_utc(datetime.combine(day, time(12, 0)), tzname), day
+    dt = parse_dt(raw, field)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt, utc_to_wall(dt, tzname).date()
 
 
 def parse_date(value, field: str = "date") -> date:

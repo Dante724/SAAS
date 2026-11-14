@@ -15,7 +15,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.services.dates import day_end_utc, day_start_utc, now_utc, parse_dt, shop_today, shop_tzname, today_in
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
 from backend.models import (
     Account,
     CashFlowItem,
@@ -371,11 +371,13 @@ async def _create_transaction(data: TxnIn, db: AsyncSession, current: Employee):
     retro = False
     actual = None
     if data.actual_date:
-        actual = parse_dt(data.actual_date, "actual_date")
+        # BE-3: a date-only actual_date is that day on the shop's clock, not UTC midnight.
+        from backend.services.dates import parse_money_moment
+        actual, day = await parse_money_moment(db, current.org_id, data.actual_date, "actual_date")
         today = await shop_today(db, current.org_id)
-        if actual.date() > today:   # audit FIN-11: money isn't recorded before it moves
+        if day > today:   # audit FIN-11: money isn't recorded before it moves
             raise HTTPException(422, "The date can't be in the future")
-        retro = actual.date() < today
+        retro = day < today
         if retro:
             await assert_perm(db, current, "can_retroactive_cash")
     await post_transaction(
@@ -756,10 +758,26 @@ async def _transfer(data: TransferIn, db: AsyncSession, current: Employee):
 
 # ── Close order → payment ────────────────────────────
 
+# BE-2: Payment.method is a fact the money code relies on (gift_card is left out of money-in and
+# can't be refunded as cash; refund and balance have their own handling), so a client may only send
+# the methods its screen offers. Gift-card money comes in through redeem-giftcard only.
+_TAKE_METHODS = ("cash", "cashless", "card", "balance")
+_PREPAY_METHODS = ("cash", "cashless", "card")
+
+
+def _allowed_method(v: str, allowed: tuple) -> str:
+    v = (v or "").strip().lower()
+    if v not in allowed:
+        raise ValueError(f"Payment method must be one of: {', '.join(allowed)}")
+    return v
+
+
 class OrderPaymentIn(BaseModel):
     method: str                      # cash|cashless|card|balance
     account_id: Optional[str] = None  # required unless method == balance
     amount: Optional[float] = None    # defaults to order total
+
+    _method = field_validator("method")(classmethod(lambda cls, v: _allowed_method(v, _TAKE_METHODS)))
 
 
 @router.get("/orders/{order_id}/payment-context")
@@ -1003,6 +1021,8 @@ class PrepayIn(BaseModel):
     amount: float
     account_id: str
     method: str = "cash"
+
+    _method = field_validator("method")(classmethod(lambda cls, v: _allowed_method(v, _PREPAY_METHODS)))
 
     @field_validator("amount")
     @classmethod

@@ -31,6 +31,7 @@ from backend.services.apikeys import (
     RESOURCES,
     ROTATION_GRACE,
     SCOPES,
+    creator_key_block,
     generate_key,
     key_rate_limit,
     normalize_scopes,
@@ -124,6 +125,12 @@ async def create_key(
     current: Employee = Depends(_MANAGE),
 ):
     scopes = sorted(set(data.scopes))
+    # SEC-09: a key acts on the whole shop, so a creator limited to some locations, records,
+    # warehouses, cashboxes or statuses can't mint one (and a key stops if its creator is narrowed
+    # later: services/apikeys._authenticate checks the same rule on every use).
+    blocked = await creator_key_block(db, current)
+    if blocked:
+        raise HTTPException(403, blocked)
     if "costs:read" in scopes:
         from backend.services.redact import COST_PERM
         if not await has_perm(db, current, COST_PERM):

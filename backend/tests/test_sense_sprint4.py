@@ -93,8 +93,13 @@ async def test_a_drafted_reminder_waits_for_the_owner_then_sends(client, db, sen
     assert len(drafts) == 1 and inv.invoice_number in drafts[0]["body"] and drafts[0]["agent"] == "collections"
     r = await client.post("/api/sense/agents/drafts/approve", json={"ids": [drafts[0]["id"]]}, headers=H)
     assert r.status_code == 200 and r.json()["approved"] == 1
-    tomorrow_noon = (datetime.utcnow() + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
-    await nr.run_due(db, org_id=org_id, now=tomorrow_noon)
+    # run the sender just after the time approval scheduled it (the next opening time). A fixed
+    # "tomorrow noon" is 27 h after a 09:00 slot when CI runs before 09:00 UTC, past the 24 h
+    # lateness cut-off (notification_rules.MAX_SEND_LATENESS), so the reminder was skipped.
+    db.expire_all()
+    when = [m.send_at for m in await _logs(db, org_id) if m.status == "scheduled"]
+    assert len(when) == 1 and when[0] is not None
+    await nr.run_due(db, org_id=org_id, now=when[0] + timedelta(minutes=5))
     assert len(sent) == 1 and sent[0]["channel"] == "sms" and inv.invoice_number in sent[0]["body"]
     audit = (await db.execute(select(AuditLog).where(AuditLog.org_id == org_id,
                                                      AuditLog.action == "sense.agent.send_batch"))).scalars().first()
