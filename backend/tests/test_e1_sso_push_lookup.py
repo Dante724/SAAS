@@ -171,7 +171,7 @@ async def test_oidc_callback_email_domain_hook():
 # ── SEC-09 ─────────────────────────────────────────────────────────────────────────────────────
 async def test_push_endpoint_cant_be_taken_over_without_its_keys(client, tenant, db):
     from backend.models import PushSubscription
-    endpoint = f"https://push.example/{uuid.uuid4().hex}"
+    endpoint = f"https://fcm.googleapis.com/fcm/send/{uuid.uuid4().hex}"
     keys = {"p256dh": "BOWNERKEY", "auth": "owner-auth-secret"}
     r = await client.post("/api/push/subscribe", json={"endpoint": endpoint, "keys": keys}, headers=tenant)
     assert r.status_code == 201, r.text
@@ -194,7 +194,7 @@ async def test_push_endpoint_cant_be_taken_over_without_its_keys(client, tenant,
 
 
 async def test_own_push_subscription_can_refresh_its_keys(client, tenant):
-    endpoint = f"https://push.example/{uuid.uuid4().hex}"
+    endpoint = f"https://fcm.googleapis.com/fcm/send/{uuid.uuid4().hex}"
     r = await client.post("/api/push/subscribe", json={"endpoint": endpoint, "keys": {"p256dh": "A", "auth": "a"}},
                           headers=tenant)
     assert r.status_code == 201

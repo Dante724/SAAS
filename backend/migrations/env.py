@@ -35,6 +35,13 @@ def _configure(connection):
         target_metadata=target_metadata,
         render_as_batch=True,          # required for SQLite ALTER support
         compare_type=True,
+        # Each migration commits on its own (final review P2-1). In one shared transaction the
+        # ACCESS EXCLUSIVE locks an early migration takes (dec08's ALTER TYPEs, w2b01's CHECKs,
+        # w4i01's add_column ...) stayed held through every later migration, including dbi01's and
+        # w4s01's read-only preflight scans, so login and every request queued behind them. It is
+        # also what alembic recommends with autocommit_block(): that block commits whatever came
+        # before it anyway. A failed migration rolls back alone; the ones before it stay applied.
+        transaction_per_migration=True,
     )
 
 
@@ -62,8 +69,8 @@ async def _run_async() -> None:
     )
     def _do_run(sync_conn):
         _configure(sync_conn)
-        # Alembic must own the transaction: it commits the run, and migrations that need
-        # op.get_context().autocommit_block() (CREATE INDEX CONCURRENTLY on Postgres) assert
+        # Alembic must own the transactions (one per migration, see _configure): migrations that
+        # need op.get_context().autocommit_block() (CREATE INDEX CONCURRENTLY on Postgres) assert
         # without one.
         with context.begin_transaction():
             context.run_migrations()
