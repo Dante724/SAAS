@@ -65,10 +65,12 @@ async def _load(db: AsyncSession, token: str, *, action: bool = False) -> Order:
     # wrong customer); restoring it brings the link back.
     if not order or order.archived:
         raise HTTPException(404, "Order not found")
-    from backend.services.track_links import is_expired
-    if is_expired(order):
-        raise HTTPException(404, "This link has expired. Ask the shop to send you a new one.")
     set_tenant(db, order.org_id)   # the rest of this request only sees this order's shop
+    # Owner decision 8: 90 days after the job closed the link stops: a 410 with the shop's contact
+    # (the page's "this link has expired" state), never the job. Photos and PDFs come through here too.
+    from backend.services.track_links import TrackLinkExpired, link_expired, shop_contact
+    if await link_expired(db, order):
+        raise TrackLinkExpired(await shop_contact(db, order))
     if action:
         from backend.services.org_live import assert_public_live
         await assert_public_live(db, order.org_id)
@@ -1019,9 +1021,12 @@ async def portal_order(token: str, order_id: str, request: Request, db: AsyncSes
     if not order:
         raise HTTPException(404, "Order not found")
     payload = await _track_payload(db, order, f"/api/media/portal/{token}/{order.id}")
+    from backend.services.track_links import link_expired
     payload.update({
         "id": order.id,
-        "public_token": order.public_token,
+        # An expired track link (owner decision 8) is not handed out: the portal hides the parts
+        # that need it instead of offering buttons that answer 410.
+        "public_token": None if await link_expired(db, order) else order.public_token,
         "diagnosis": order.diagnosis,
         "warranty_until": order.warranty_until.isoformat() if order.warranty_until else None,
         "can_approve": payload["awaiting_approval"],

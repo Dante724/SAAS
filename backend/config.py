@@ -222,6 +222,10 @@ class Settings(BaseSettings):
     # decryption tolerates plaintext so rows survive turning encryption on/off.
     TOKEN_ENCRYPTION_KEY: str = ""
 
+    # Owner decision 8: a customer tracking link (/track/{token}) stops working this many days
+    # after its job is closed (services/track_links). One platform default, no per-shop setting.
+    TRACK_LINK_DAYS: int = 90
+
     # -- Web Push (VAPID) — absent keys -> notifications stored, push simulated --
     VAPID_PUBLIC_KEY: str = ""
     VAPID_PRIVATE_KEY: str = ""
