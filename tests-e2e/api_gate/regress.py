@@ -1129,11 +1129,12 @@ def w3b_2():
     """Company dashboard refunds and cash_collected include till refunds."""
     s = CTX.a
     pid = s.part(qty=5)
-    b = revenue_views(s, settle=False)
+    # the Home/company figures are cached for 30 s (PERF-07): read both sides fresh
+    b = revenue_views(s)
     sd = sale(s, pid, qty=1, price=60)
     must(s.owner.post(f"/api/sales/{sd['id']}/returns",
                       {"lines": [{"line_id": sd["lines"][0]["id"], "qty": 1}], "account_id": s.cash}), "return")
-    a = revenue_views(s, settle=False)
+    a = revenue_views(s)
     d = deltas(b, a, ["company.today.refunds", "company.today.cash_collected"])
     check(d["company.today.refunds"] == 60 and d["company.today.cash_collected"] == 0,
           f"till sale of 60 + full refund moved {d}")

@@ -1,10 +1,11 @@
 import asyncio
+import re
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -192,26 +193,47 @@ async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: 
     if not mine <= theirs:
         raise HTTPException(403, "You can't assign a role with more access than your own")
     # Permissions alone aren't the whole story: a role also limits which locations, orders,
-    # contacts and warehouses its holders see. Never hand out wider data scope than you have.
-    if current.role_id and role_id and not await _is_owner(db, current):
-        from backend.routers.rbac import _assert_scope_not_wider
-        editor = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        target = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
-        if editor and target:
-            from backend.routers.rbac import PAYROLL_ACCESS
-            from backend.services.permissions import role_allows
-            _assert_scope_not_wider(editor, _ScopeView(target),
-                                    grants_payroll=any(role_allows(target, c) for c in PAYROLL_ACCESS))
+    # contacts, warehouses, cashboxes and statuses its holders see. Never hand out wider data
+    # scope than you have.
+    if role_id and not owner:
+        await _assert_scope_covers(db, current, role_id)
+
+
+async def _assert_scope_covers(db: AsyncSession, current: Employee, target_role_id: Optional[str]) -> None:
+    """The (non-owner) actor's role must cover the target role's data scope: locations, record
+    scope, warehouses, cashboxes, hidden statuses and payroll. No target role, or a dangling one,
+    reads as unlimited (the safe direction). An actor with no role has no limits to stay within."""
+    if not current.role_id:
+        return
+    from backend.routers.rbac import PAYROLL_ACCESS, _assert_scope_not_wider
+    from backend.services.permissions import role_allows
+    editor = (await db.execute(select(Role).where(
+        Role.id == current.role_id, Role.org_id == current.org_id))).scalar_one_or_none()
+    if editor is None:
+        raise HTTPException(403, "Your role is missing; ask the owner")
+    target = (await db.execute(select(Role).where(
+        Role.id == target_role_id, Role.org_id == current.org_id))).scalar_one_or_none() if target_role_id else None
+    grants_payroll = target is None or any(role_allows(target, c) for c in PAYROLL_ACCESS)
+    _assert_scope_not_wider(editor, _ScopeView(target), grants_payroll=grants_payroll)
 
 
 class _ScopeView:
-    """A role's data-scope fields in the shape rbac._assert_scope_not_wider reads."""
-    def __init__(self, role: Role):
-        import json
+    """A role's data-scope fields in the shape rbac._assert_scope_not_wider reads. None (no role)
+    is the unlimited view."""
+    def __init__(self, role: Optional[Role]):
+        from backend.routers.rbac import _id_list
         for f in ("order_scope", "contact_scope", "warehouse_scope", "location_scope", "payroll_scope"):
-            setattr(self, f, getattr(role, f, None) or "all")
-        self.payroll_employee_ids = getattr(role, "payroll_employee_ids", None) or []
-        self.location_ids = json.loads(role.location_ids or "[]") if isinstance(role.location_ids, str) else (role.location_ids or [])
+            setattr(self, f, (getattr(role, f, None) or "all") if role is not None else "all")
+        self.payroll_employee_ids = _id_list(getattr(role, "payroll_employee_ids", None))
+        self.location_ids = _id_list(getattr(role, "location_ids", None))
+        # "selected" with no locations picked was read as "every location" by some screens (the
+        # role editor refuses to save it, rbac._check_locations). An old row like that counts as
+        # all locations here, so a location-limited manager can't hand it out or manage its holders.
+        if self.location_scope == "selected" and not self.location_ids:
+            self.location_scope = "all"
+        self.warehouse_ids = _id_list(getattr(role, "warehouse_ids", None))
+        self.account_ids = _id_list(getattr(role, "account_ids", None))      # [] = every cashbox
+        self.hidden_status_keys = _id_list(getattr(role, "hidden_status_keys", None))
 
 
 async def _is_owner(db: AsyncSession, emp: Employee) -> bool:
@@ -231,13 +253,24 @@ async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee)
     # an equally-privileged teammate must not be able to take it over.
     if await _is_owner(db, emp):
         raise HTTPException(403, "Only the shop owner can change the owner's account")
-    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
+    owner = await _is_owner(db, current)
+    mine = set() if owner else await _denied_for_role(db, current.org_id, current.role_id)
     try:
         theirs = await _denied_for_role(db, current.org_id, emp.role_id)
     except HTTPException:
         theirs = set()   # dangling role → treat as full access (the safe direction)
     if not mine <= theirs:
         raise HTTPException(403, "You can't change an account with more access than your own")
+    # SEC-02 (final review): permissions alone aren't the whole story. A manager limited to some
+    # locations, their own records, some cashboxes or warehouses must not set the password, 2FA
+    # or email of a teammate who sees more, then sign in as them.
+    if not owner:
+        try:
+            await _assert_scope_covers(db, current, emp.role_id)
+        except HTTPException as e:
+            if e.status_code != 403:
+                raise
+            raise HTTPException(403, "You can't change an account with wider access than your own") from None
 
 
 @router.post("/employees", status_code=201)
@@ -1198,6 +1231,17 @@ async def update_public_pages(
     return {"ok": True}
 
 
+# SEC-01: never usable as a shop's public subdomain: anything shaped like an org id (32 hex digits,
+# dashes ignored) and the names of the app's own hosts and public routes.
+_ID_SHAPED = re.compile(r"[0-9a-f]{32}")
+RESERVED_SUBDOMAINS = frozenset({
+    "www", "api", "app", "admin", "book", "booking", "portal", "track", "status", "lookup",
+    "public", "static", "assets", "media", "cdn", "mail", "email", "smtp", "help", "support",
+    "docs", "blog", "login", "signin", "signup", "register", "dashboard", "account", "billing",
+    "tekly", "repairos", "staging", "dev", "test", "demo",
+})
+
+
 class SubdomainIn(BaseModel):
     subdomain: str
 
@@ -1213,9 +1257,16 @@ async def change_subdomain(
     slug = data.subdomain.strip().lower()
     if not _re.fullmatch(r"[a-z0-9][a-z0-9-]{2,40}", slug):
         raise HTTPException(422, "Subdomain must be 3-40 chars: a-z, 0-9, hyphens")
+    # SEC-01 (final review): a shop's booking link is /book/<org id> until it picks a subdomain,
+    # so a subdomain that looks like an id could take over another shop's link. Ids are UUIDs:
+    # refuse anything id-shaped (any shop's id included), and the words the app's own routes use.
+    if _ID_SHAPED.fullmatch(slug.replace("-", "")) or slug in RESERVED_SUBDOMAINS:
+        raise HTTPException(422, "That subdomain isn't available. Pick a name with letters in it.")
     from backend.models import Organisation
-    taken = (await db.execute(select(Organisation).where(
-        Organisation.subdomain == slug, Organisation.id != current.org_id))).scalar_one_or_none()
+    # skip_tenant_filter: subdomains are unique across every shop.
+    taken = (await db.execute(select(Organisation.id).where(
+        or_(Organisation.subdomain == slug, Organisation.id == slug), Organisation.id != current.org_id)
+        .execution_options(skip_tenant_filter=True))).first()
     if taken:
         raise HTTPException(409, "That subdomain is already taken")
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
