@@ -168,7 +168,7 @@ def _assert_scope_not_wider(editor: Role, data: "RoleIn", *, grants_payroll: boo
     if grants_payroll:
         fields.append("payroll_scope")
     for field in fields:
-        if getattr(editor, field, "all") in _NARROW and getattr(data, field, "all") not in _NARROW:
+        if (getattr(editor, field, None) or "all") in _NARROW and (getattr(data, field, None) or "all") not in _NARROW:
             raise HTTPException(403, f"You can't give a role wider access than your own ({field.replace('_', ' ')})")
     mine = getattr(editor, "payroll_scope", "all") if grants_payroll else "all"
     if mine == "own" and getattr(data, "payroll_scope", "all") != "own":
@@ -179,9 +179,39 @@ def _assert_scope_not_wider(editor: Role, data: "RoleIn", *, grants_payroll: boo
         if not set(data.payroll_employee_ids or []) <= set(editor.payroll_employee_ids or []):
             raise HTTPException(403, "You can't give a role payroll access to people outside your own")
     if getattr(editor, "location_scope", "all") == "selected":
-        mine = set(json.loads(editor.location_ids or "[]"))
+        mine = set(_id_list(editor.location_ids))
         if not set(data.location_ids or []) <= mine:
             raise HTTPException(403, "You can't give a role locations you don't have")
+    # SEC-03 (final review): the kind of scope isn't enough, the actual lists count too.
+    # Cashboxes: an empty list means every till, so a till-limited editor must name a subset.
+    my_accounts = set(_id_list(getattr(editor, "account_ids", None)))
+    if my_accounts:
+        theirs = set(_id_list(getattr(data, "account_ids", None)))
+        if not theirs or not theirs <= my_accounts:
+            raise HTTPException(403, "You can't give a role cashboxes you don't have")
+    # Warehouses: a limited editor (any scope but "all", see scoping.allowed_warehouses) can only
+    # hand out warehouses on their own list.
+    if (getattr(editor, "warehouse_scope", None) or "all") != "all":
+        if not set(_id_list(getattr(data, "warehouse_ids", None))) <= set(_id_list(editor.warehouse_ids)):
+            raise HTTPException(403, "You can't give a role warehouses you don't have")
+    # Hidden statuses: whatever the editor can't see stays hidden for the role they give out.
+    missing = set(_id_list(getattr(editor, "hidden_status_keys", None))) - set(
+        _id_list(getattr(data, "hidden_status_keys", None)))
+    if missing:
+        raise HTTPException(403, "You can't give a role access to statuses hidden from you: "
+                                 + ", ".join(sorted(missing)))
+
+
+def _id_list(v) -> list:
+    """A role's id list, whether stored as JSON text (location_ids) or a JSON column."""
+    if not v:
+        return []
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except ValueError:
+            return []
+    return [i for i in v if i] if isinstance(v, (list, tuple, set)) else []
 
 
 async def guard_role_change(db: AsyncSession, current: Employee, role: Optional[Role],

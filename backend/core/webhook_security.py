@@ -7,7 +7,8 @@ Two small, self-contained defenses:
     ``webhook_secret`` when it is created; inbound posts must present it in an
     ``X-Webhook-Token`` header. Fail-closed (whh1, B8): the migration backfilled orgs that
     had none, and an org without a token, an unknown org and a wrong token all get the same
-    401, so the endpoint can't be used to learn which org ids exist. 120 posts/min per org.
+    401, so the endpoint can't be used to learn which org ids exist. 120 verified posts/min per
+    org; failed posts are limited per sender IP so they can't use up the shop's limit (SEC-07).
 
 2.  A sliding-window rate limiter for public endpoints. ``/api/public/lookup`` pairs an
     order number with a phone; without throttling it can be brute-forced. The limiter is
@@ -30,14 +31,23 @@ from backend.models import Organisation
 log = logging.getLogger("tekly")
 
 
-INBOUND_TOKEN_LIMIT_PER_MIN = 120
+INBOUND_TOKEN_LIMIT_PER_MIN = 120          # verified posts, per shop
+INBOUND_BAD_TOKEN_LIMIT_PER_MIN = 30       # failed posts, per sender IP (never per shop)
+INBOUND_SENDER_LIMIT_PER_MIN = 300         # any post, per (shop, sender IP), before the lookup
 _BAD_TOKEN = "Invalid or missing X-Webhook-Token"
 
 
 async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) -> None:
-    """Reject an inbound webhook that doesn't present the org's token. Fails closed."""
+    """Reject an inbound webhook that doesn't present the org's token. Fails closed.
+
+    Rate limits (SEC-07): the shop's bucket counts only posts that verified, so junk sent by
+    someone who knows (or guessed) the org id can't use it up and get the provider's genuine
+    events refused. A failed post counts against its sender's IP instead, and every sender has a
+    generous cap per (shop, IP) before the database is touched at all."""
     from backend.services.ratelimit import aenforce
-    await aenforce("inbound_token_webhook", (org_id or "")[:64], INBOUND_TOKEN_LIMIT_PER_MIN, 60)
+    org_key = (org_id or "")[:64]
+    ip = client_ip(request)
+    await aenforce("inbound_token_webhook_sender", f"{org_key}|{ip}", INBOUND_SENDER_LIMIT_PER_MIN, 60)
     org = (await db.execute(select(Organisation).where(
         Organisation.id == org_id))).scalar_one_or_none()
     expected = (org.webhook_secret or "") if org else ""
@@ -45,7 +55,9 @@ async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) ->
     # Compare even when there is nothing to compare against, so timing doesn't tell them apart.
     ok = hmac.compare_digest(presented.encode(), (expected or "\0" * 32).encode())
     if not (org and expected and presented and ok):
+        await aenforce("inbound_token_webhook_bad", ip, INBOUND_BAD_TOKEN_LIMIT_PER_MIN, 60)
         raise HTTPException(401, _BAD_TOKEN)
+    await aenforce("inbound_token_webhook", org.id, INBOUND_TOKEN_LIMIT_PER_MIN, 60)
     db.sync_session.info["tenant_org"] = org.id   # proven this shop's: scope the rest of the request
 
 

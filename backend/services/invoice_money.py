@@ -228,6 +228,13 @@ async def _credit(db: AsyncSession, inv: Invoice, amount: float) -> None:
         await freeze_lines(db, inv)
 
 
+async def _sync_plan_periods(db: AsyncSession, *, invoice_ids=(), order_ids=()) -> None:
+    """QA-5: a membership period billed on this invoice / job is marked paid with the payment
+    (the memberships list used to do it on every GET, for the whole shop, and commit)."""
+    from backend.services.memberships import sync_paid_by
+    await sync_paid_by(db, invoice_ids=invoice_ids, order_ids=order_ids)
+
+
 async def apply_order_money(db: AsyncSession, order: Order) -> float:
     """Put money held on the job (deposits, payments taken before it had an invoice for them) on
     its open invoices, oldest first, each up to its balance. Refunds not tied to an invoice come
@@ -265,6 +272,9 @@ async def apply_order_money(db: AsyncSession, order: Order) -> float:
         if not rows or applied >= pool:
             break
     await db.flush()
+    if applied:
+        await _sync_plan_periods(db, invoice_ids=[i.id for i in await invoices_for_order(db, order.id)],
+                                 order_ids=[order.id])
     return applied
 
 
@@ -296,6 +306,7 @@ async def apply_order_payment(db: AsyncSession, order: Order, amount: float, **f
     await db.flush()
     from backend.services.order_money import resync_write_off   # paid after dropping: less is written off
     await resync_write_off(db, order, fields.get("received_by_id"))
+    await _sync_plan_periods(db, invoice_ids=[p.invoice_id for p in out], order_ids=[order.id])
     return out
 
 
@@ -328,6 +339,7 @@ async def apply_payment_to_invoice(db: AsyncSession, inv: Invoice, amount: float
     from backend.services.order_money import resync_write_off   # paid after dropping: less is written off
     for o in orders:
         await resync_write_off(db, o, fields.get("received_by_id"))
+    await _sync_plan_periods(db, invoice_ids=[inv.id], order_ids=[o.id for o in orders])
     return out
 
 

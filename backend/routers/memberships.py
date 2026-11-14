@@ -25,7 +25,7 @@ from backend.models import (
 )
 from backend.services import memberships as svc
 from backend.services.auth import get_current_employee, has_perm, require_perm
-from backend.services.dates import org_today, shop_today
+from backend.services.dates import org_today, shop_today, shop_tzname, today_in
 
 router = APIRouter(prefix="/api/memberships", tags=["memberships"])
 
@@ -157,19 +157,65 @@ def _asset_label(d: Optional[Device]) -> str:
 
 async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = False,
                           show_money: bool = True) -> dict:
-    plan = (await db.execute(select(MembershipPlan).where(MembershipPlan.id == m.plan_id))).scalar_one()
-    client = (await db.execute(select(Client).where(Client.id == m.client_id))).scalar_one_or_none()
-    device = (await db.execute(select(Device).where(Device.id == m.device_id))).scalar_one_or_none() \
-        if m.device_id else None
-    today = await shop_today(db, m.org_id)
-    unpaid = (await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
-        MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
-        MembershipPeriod.due_on <= today))).scalar_one() or 0
-    saved = (await db.execute(select(func.coalesce(func.sum(MembershipUsage.value), 0)).where(
-        MembershipUsage.membership_id == m.id, MembershipUsage.term_start == m.term_start))).scalar_one() or 0
-    oldest_due = (await db.execute(select(func.min(MembershipPeriod.due_on)).where(
-        MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
-        MembershipPeriod.due_on <= today))).scalar_one()
+    return (await _membership_rows(db, [m], detail=detail, show_money=show_money))[0]
+
+
+async def _membership_rows(db: AsyncSession, ms: list, *, detail: bool = False,
+                           show_money: bool = True) -> list[dict]:
+    """The staff view of each membership. QA-5: everything a row needs is loaded for the whole
+    page in a fixed number of queries (plans, clients, assets, period and usage sums, plan items,
+    service names, counts used / pending), not ~13 per row."""
+    if not ms:
+        return []
+    ids = [m.id for m in ms]
+    plans = {p.id: p for p in (await db.execute(select(MembershipPlan).where(
+        MembershipPlan.id.in_({m.plan_id for m in ms})))).scalars().all()}
+    client_ids = {m.client_id for m in ms if m.client_id}
+    clients = {c.id: c for c in (await db.execute(select(Client).where(
+        Client.id.in_(client_ids)))).scalars().all()} if client_ids else {}
+    device_ids = {m.device_id for m in ms if m.device_id}
+    devices = {d.id: d for d in (await db.execute(select(Device).where(
+        Device.id.in_(device_ids)))).scalars().all()} if device_ids else {}
+    tzs = {oid: await shop_tzname(db, oid) for oid in {m.org_id for m in ms}}
+    todays = {oid: today_in(tz) for oid, tz in tzs.items()}
+    # Unpaid periods already due, per member (as of each shop's today; a page is one shop).
+    due = {}
+    for oid, today in todays.items():
+        due.update({mid: (amt or 0, oldest) for mid, amt, oldest in (await db.execute(select(
+            MembershipPeriod.membership_id, func.coalesce(func.sum(MembershipPeriod.amount), 0),
+            func.min(MembershipPeriod.due_on)).where(
+            MembershipPeriod.membership_id.in_([m.id for m in ms if m.org_id == oid]),
+            MembershipPeriod.paid_at.is_(None), MembershipPeriod.due_on <= today)
+            .group_by(MembershipPeriod.membership_id))).all()})
+    saved_by = {(mid, ts): v or 0 for mid, ts, v in (await db.execute(select(
+        MembershipUsage.membership_id, MembershipUsage.term_start,
+        func.coalesce(func.sum(MembershipUsage.value), 0)).where(MembershipUsage.membership_id.in_(ids))
+        .group_by(MembershipUsage.membership_id, MembershipUsage.term_start))).all()}
+    with_items = [m for m in ms if detail or m.status in svc.LIVE]
+    items_by_plan = await svc.plan_items_by_plan(db, {m.plan_id for m in with_items})
+    names, used, pending = {}, {}, {}
+    if with_items:
+        for oid in {m.org_id for m in with_items}:
+            names.update(await _service_names(db, oid, sorted({
+                i.service_id for m in with_items if m.org_id == oid
+                for i in items_by_plan.get(m.plan_id, []) if i.service_id})))
+        if any(i.kind == "service" for its in items_by_plan.values() for i in its):
+            used = await svc.usage_counts(db, [m.id for m in with_items])
+            pending = await svc.pending_counts(db, [m.id for m in with_items])
+    out = []
+    for m in ms:
+        out.append(await _membership_row(db, m, plan=plans[m.plan_id], client=clients.get(m.client_id),
+                                         device=devices.get(m.device_id), today=todays[m.org_id],
+                                         tzname=tzs[m.org_id], due=due.get(m.id, (0, None)),
+                                         saved=saved_by.get((m.id, m.term_start), 0),
+                                         items=items_by_plan.get(m.plan_id, []), names=names,
+                                         used=used, pending=pending, detail=detail, show_money=show_money))
+    return out
+
+
+async def _membership_row(db: AsyncSession, m: Membership, *, plan, client, device, today, tzname, due, saved,
+                          items, names, used, pending, detail: bool, show_money: bool) -> dict:
+    unpaid, oldest_due = due
     row = {
         "id": m.id, "plan_id": plan.id, "plan": plan.name, "color": plan.color,
         "client_id": m.client_id, "client": client.name if client else "",
@@ -188,16 +234,12 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
     if show_money:
         row.update({"price": m.price, "owed": float(unpaid)})
     if detail or m.status in svc.LIVE:
-        items = []
-        names = None
-        for it in await svc.plan_items(db, plan.id):
-            if names is None:
-                names = await _service_names(db, m.org_id, [i.service_id for i in await svc.plan_items(db, plan.id)
-                                                            if i.service_id])
+        entries = []
+        for it in items:
             entry = {"id": it.id, "kind": it.kind, "text": svc.label_of(it, names.get(it.service_id))}
             if it.kind == "service":
-                entry["left"] = await svc.remaining(db, m, it)
-                entry["of"] = await svc.allowance(db, m, it)
+                entry["left"] = svc.remaining_from(m, it, tzname, used, pending)
+                entry["of"] = svc.allowance_from(m, it, tzname, used)
                 win = svc.window_around(it, m.term_start)
                 if win:
                     entry["window"] = [win[0].isoformat(), (win[1] - timedelta(days=1)).isoformat()]
@@ -206,8 +248,8 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
                             and (closes - today).days <= 30:
                         row["attention"] = {"kind": "window",
                                             "text": f"{entry['text'].split(' × ')[0]} not booked · closes {closes:%d %b}"}
-            items.append(entry)
-        row["items"] = items
+            entries.append(entry)
+        row["items"] = entries
     if detail and show_money:
         given = (await db.execute(select(func.coalesce(func.sum(MembershipUsage.value), 0)).where(
             MembershipUsage.membership_id == m.id))).scalar_one() or 0
@@ -299,8 +341,8 @@ async def list_memberships(
     plan_id: Optional[str] = None, manager_id: Optional[str] = None, q: Optional[str] = Query(None, max_length=100),
     db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee),
 ):
-    await svc.sync_payments(db, current.org_id)
-    await db.commit()
+    # QA-5: a read only reads. Periods are marked paid where the money comes in
+    # (invoice_money -> svc.sync_paid_by), with the hourly membership sweep as the fallback.
     stmt = select(Membership).where(Membership.org_id == current.org_id)
     today = await shop_today(db, current.org_id)
     if view == "former":
@@ -351,7 +393,7 @@ async def list_memberships(
                                         if rn and end <= today + timedelta(days=30)), 2),
             "owed": float(owed),
         }
-    return {"items": [await _membership_out(db, m, show_money=money) for m in rows], "counts": counts, "totals": totals}
+    return {"items": await _membership_rows(db, rows, show_money=money), "counts": counts, "totals": totals}
 
 
 @router.get("/for")
@@ -367,18 +409,16 @@ async def memberships_for(client_id: Optional[str] = None, device_id: Optional[s
         ids = (await db.execute(select(MembershipAsset.membership_id).where(
             MembershipAsset.org_id == current.org_id, MembershipAsset.device_id == device_id))).scalars().all()
         stmt = stmt.where(Membership.id.in_(ids or ["-"]))
-    await svc.sync_payments(db, current.org_id)
-    await db.commit()
     rows = (await db.execute(stmt.order_by(Membership.created_at.desc()))).scalars().all()
     money = await has_perm(db, current, "can_view_client_info")
-    live = [await _membership_out(db, m, show_money=money) for m in rows if m.status in svc.LIVE]
-    former = []
-    seen = {m["plan_id"] for m in live}
+    live_ms = [m for m in rows if m.status in svc.LIVE]
+    former_ms, seen = [], {m.plan_id for m in live_ms}
     for m in rows:
         if m.status in svc.ENDED and m.plan_id not in seen:
             seen.add(m.plan_id)
-            former.append(await _membership_out(db, m, show_money=money))
-    return {"live": live, "former": former}
+            former_ms.append(m)
+    out = await _membership_rows(db, live_ms + former_ms, show_money=money)
+    return {"live": out[:len(live_ms)], "former": out[len(live_ms):]}
 
 
 @router.get("/order/{order_id}")
@@ -395,8 +435,7 @@ async def for_order(order_id: str, db: AsyncSession = Depends(get_db),
             MembershipAsset.device_id == order.device_id))).scalars().all()
         ms = (await db.execute(select(Membership).where(
             Membership.id.in_(ids or ["-"]), Membership.status.in_(svc.LIVE)))).scalars().all()
-        plans = [await _membership_out(db, m, show_money=await has_perm(db, current, "can_view_client_info"))
-                 for m in ms]
+        plans = await _membership_rows(db, list(ms), show_money=await has_perm(db, current, "can_view_client_info"))
     coverable = 0
     if plans and order.device_id:
         from backend.models import OrderLine
@@ -486,8 +525,6 @@ async def sell_membership(data: SellIn, db: AsyncSession = Depends(get_db),
 async def get_membership(mid: str, db: AsyncSession = Depends(get_db),
                          current: Employee = Depends(get_current_employee)):
     m = await _membership(db, current.org_id, mid)
-    await svc.sync_payments(db, current.org_id, m.id)
-    await db.commit()
     money = await has_perm(db, current, "can_view_client_info")
     out = await _membership_out(db, m, detail=True, show_money=money)
     if money and m.status in svc.LIVE:

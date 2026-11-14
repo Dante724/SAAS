@@ -363,7 +363,9 @@ async def list_sales(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
 ):
-    _q = select(Sale).where(Sale.org_id == current.org_id)
+    from backend.services import scoping
+    # SEC-06: a role limited to some locations sees only those branches' sales
+    _q = scoping.scope_sales(select(Sale).where(Sale.org_id == current.org_id), await scoping.role_for(db, current))
     if location_id:
         _q = _q.where(Sale.location_id == location_id)
     rows = (await db.execute(_q.order_by(Sale.created_at.desc()).limit(200))).scalars().all()
@@ -397,6 +399,7 @@ async def delete_sale(
         Sale.id == sale_id, Sale.org_id == current.org_id).with_for_update())).scalar_one_or_none()
     if not sale:
         raise HTTPException(404, "Sale not found")
+    await _assert_sale_location(db, current, sale)
     if sale.voided_at:
         raise HTTPException(409, "This sale was already deleted")
     # F2: voiding only reverses the books; money taken on a card reader must go back to the card first.
@@ -671,7 +674,16 @@ async def _load_sale(db, current, sale_id, lock=False) -> Sale:
     sale = (await db.execute(q.with_for_update() if lock else q)).scalar_one_or_none()
     if not sale:
         raise HTTPException(404, "Sale not found")
+    await _assert_sale_location(db, current, sale)
     return sale
+
+
+async def _assert_sale_location(db, current, sale: Sale) -> None:
+    """SEC-06: a role limited to some locations can't open, pay, return or void another
+    branch's sale (the stock and cash it would move belong to that branch)."""
+    from backend.services import scoping
+    if not scoping.may_use_location(await scoping.role_for(db, current), sale.location_id):
+        raise HTTPException(403, "Your role is not allowed to act on this location")
 
 
 async def _unsell_serials(db, org_id: str, ids: list, *, ref_type: Optional[str] = None,
@@ -1120,9 +1132,7 @@ async def sale_receipt(
 ):
     """The receipt for the after-sale Print / Email / WhatsApp choices."""
     from backend.models import Client, Organisation
-    sale = (await db.execute(select(Sale).where(Sale.id == sale_id, Sale.org_id == current.org_id))).scalar_one_or_none()
-    if not sale:
-        raise HTTPException(404, "Sale not found")
+    sale = await _load_sale(db, current, sale_id)
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     client = (await db.execute(select(Client).where(

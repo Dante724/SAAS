@@ -203,6 +203,10 @@ from backend.core.finite_numbers import NonFiniteJsonMiddleware  # noqa: E402
 
 # Inside the size cap: a JSON body with a bare NaN / Infinity token is refused (B9).
 app.add_middleware(NonFiniteJsonMiddleware)
+from backend.core.bad_input import NulByteMiddleware  # noqa: E402
+
+# QA-2: a NUL character in the query, path or a JSON string is a 422, not a Postgres 500.
+app.add_middleware(NulByteMiddleware)
 from backend.core.body_limit import BodySizeLimitMiddleware
 
 # Inside CORS so a 413 still carries CORS headers and the browser can show the message.
@@ -232,12 +236,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from sqlalchemy.exc import DataError, IntegrityError  # noqa: E402
+from backend.core.db_errors import install_db_error_handlers  # noqa: E402
 
-from backend.core.db_errors import data_error_handler, integrity_error_handler  # noqa: E402
-
-app.add_exception_handler(IntegrityError, integrity_error_handler)   # ii144a: unique clash → plain 409
-app.add_exception_handler(DataError, data_error_handler)   # N3: a value a NUMERIC column can't hold → 422
+# ii144a: unique clash → 409. N3 / QA-1: a value a column can't hold → 422, decided by SQLSTATE on
+# any DBAPIError (asyncpg doesn't raise DataError). P2-2: CHECK violation → 422. QA-3: OverflowError → 422.
+install_db_error_handlers(app)
 
 for r in ROUTERS:
     app.include_router(r.router)

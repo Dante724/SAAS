@@ -206,7 +206,20 @@ def _bounded(label: str, limit: int, hint: str = "") -> AfterValidator:
     return AfterValidator(check)
 
 
-Qty = Annotated[float, _bounded("Quantity", MAX_QTY, " Is that a barcode or serial number?")]
+def _qty_scale(v):
+    """Schema P2-2: NUMERIC(14,4) rounds a quantity to 4 places *before* any CHECK runs, so
+    0.00001 passed `gt=0` and was stored as 0, tripping `qty <> 0` (a 500). Round here the way the
+    column will (half-up), and refuse a non-zero quantity that rounds to nothing."""
+    if v is None:
+        return v
+    r = float(Decimal(str(v)).quantize(_TT, rounding=ROUND_HALF_UP))
+    if r == 0 and v != 0:
+        raise ValueError("Quantity is too small: the smallest amount is 0.0001.")
+    return r
+
+
+Qty = Annotated[float, _bounded("Quantity", MAX_QTY, " Is that a barcode or serial number?"),
+                AfterValidator(_qty_scale)]
 Pct = Annotated[float, _bounded("Percentage", MAX_PCT)]
 Rate = Annotated[float, _bounded("Rate", MAX_RATE)]
 Points = Annotated[float, _bounded("Points value", MAX_POINTS)]

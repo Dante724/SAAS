@@ -39,5 +39,6 @@ def downgrade() -> None:
     if bind.dialect.name != "postgresql":
         return
     op.drop_constraint("fk_notification_logs_rule_id", "notification_logs", type_="foreignkey")
-    op.create_foreign_key("notification_logs_rule_id_fkey", "notification_logs", "notification_rules",
-                          ["rule_id"], ["id"])
+    # The name 3b1a6ec7c56d created (and drops on its own downgrade): `downgrade base` used to fail there.
+    op.create_foreign_key("fk_notification_logs_rule_id_notification_rules", "notification_logs",
+                          "notification_rules", ["rule_id"], ["id"])

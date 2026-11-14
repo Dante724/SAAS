@@ -932,7 +932,7 @@ async def test_pushes_go_out_only_after_the_commit(client, tenant, db, monkeypat
     from backend.services.task_alerts import sweep_overdue
     me = await _me(client, tenant)
     _, e1 = await _employee(client, db, me["org_id"], "h4@x.dev")
-    db.add(PushSubscription(employee_id=e1.id, org_id=me["org_id"], endpoint="https://push.example/x",
+    db.add(PushSubscription(employee_id=e1.id, org_id=me["org_id"], endpoint="https://fcm.googleapis.com/fcm/send/x",
                             p256dh="k", auth="a"))
     await db.commit()
     events = []
@@ -940,6 +940,7 @@ async def test_pushes_go_out_only_after_the_commit(client, tenant, db, monkeypat
     fake.webpush = lambda **kw: events.append("push")
     monkeypatch.setitem(sys.modules, "pywebpush", fake)
     monkeypatch.setattr(push, "push_enabled", lambda: True)
+    monkeypatch.setattr("backend.services.push._endpoint_is_public", lambda url: True)   # no DNS in tests
     real_commit = AsyncSession.commit
 
     async def commit(self):
@@ -1130,7 +1131,7 @@ async def test_overdue_without_a_device_or_with_a_failing_push(client, tenant, d
     me = await _me(client, tenant)
     _, quiet = await _employee(client, db, me["org_id"], "ovd7a@x.dev")
     _, broken = await _employee(client, db, me["org_id"], "ovd7b@x.dev")
-    db.add(PushSubscription(employee_id=broken.id, org_id=me["org_id"], endpoint="https://push.example/b",
+    db.add(PushSubscription(employee_id=broken.id, org_id=me["org_id"], endpoint="https://fcm.googleapis.com/fcm/send/b",
                             p256dh="k", auth="a"))
     await db.commit()
 
